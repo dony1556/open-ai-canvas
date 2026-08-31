@@ -4,13 +4,15 @@ import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { CanvasNodeType, type CanvasConnection, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
-import { getGenerationResourceNodes, getContextResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import { getGenerationResourceNodes, getContextResourceNodes, getMentionResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import { canvasNodeVideoPreviewUrl, canvasVideoAssetPreviewUrl } from "@/lib/canvas/canvas-media-preview";
 import { isNeutralColorGrade, resolveCanvasColorGradeReference } from "@/lib/canvas/canvas-color-grade";
 import { getNodeResourceKind } from "@/lib/canvas/node-registry";
 import { resolveCanvasDrawingReference } from "@/lib/canvas/canvas-drawing-reference";
 import { compileCharacterReferencePrompt } from "@/lib/canvas/canvas-character-reference";
 import { nodeReferenceImage } from "@/lib/canvas/canvas-project-generation";
 import { isCanvasWorkflowProvider } from "@/lib/canvas/canvas-workflow";
+import { audioFileExtension } from "@/lib/character-voice-formats";
 import type { ModelReferenceLimits } from "@/lib/model-selection";
 import type { Asset } from "@/stores/use-asset-store";
 
@@ -52,6 +54,7 @@ export type NodeGenerationInput = {
     type: "text" | "image" | "video" | "audio" | "character";
     sourceKind?: "drawing";
     title: string;
+    previewUrl?: string;
     alwaysIncludeText?: boolean;
     text?: string;
     image?: ReferenceImage;
@@ -69,14 +72,17 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
               return image ? [{ nodeId: sourceNode.id, type: "image" as const, title: sourceNode.title, image }] : [];
           })()
         : [];
-    const inputs = [...connectedInputs, ...portraitTextureInput, ...buildAssetGenerationInputs(assets)];
+    // 显式 @ 引用必须与提示词面板展示的资源集合一致；默认自动输入仍只取入边，
+    // 避免已有图片在没有 @图片N 时被悄悄当作自身参考图。
+    const mentionInputs = mergeGenerationInputs(buildNodeMentionGenerationInputs(nodeId, nodes, connections), portraitTextureInput, buildAssetGenerationInputs(assets));
     const storyboardInputs = getConnectedStoryboardRows(nodeId, nodes, connections);
-    const hasExplicitResourceMention = hasResolvableGenerationMention(prompt, inputs);
+    assertResolvableGenerationMentions(prompt, mentionInputs);
+    const hasExplicitResourceMention = hasResolvableGenerationMention(prompt, mentionInputs);
     const isWorkflowSource = sourceNode?.type === CanvasNodeType.Config && isCanvasWorkflowProvider(sourceNode.metadata);
     if ((Boolean(sourceNode?.metadata?.composerContent?.trim()) && (sourceNode?.type === CanvasNodeType.Config || isWorkflowSource)) || hasExplicitResourceMention) {
         const autoIncludeWorkflowMedia = isWorkflowSource;
         return buildComposerGenerationContext(
-            inputs,
+            mentionInputs,
             prompt,
             // 工作流节点由字段映射接收全部连线媒体；视频节点的历史首尾帧字段不能再额外追加参考图。
             autoIncludeWorkflowMedia ? [] : [sourceNode?.metadata?.videoStartFrameNodeId, sourceNode?.metadata?.videoEndFrameNodeId].filter((id): id is string => Boolean(id)),
@@ -260,14 +266,31 @@ export function normalizeGenerationNodeMentionTokens(prompt: string, inputs: Nod
 }
 
 function hasResolvableGenerationMention(prompt: string, inputs: NodeGenerationInput[]) {
+    return inspectGenerationMentions(prompt, inputs).hasResolved;
+}
+
+function assertResolvableGenerationMentions(prompt: string, inputs: NodeGenerationInput[]) {
+    const { unresolved } = inspectGenerationMentions(prompt, inputs);
+    if (!unresolved.length) return;
+    throw new Error(`提示词中的 ${unresolved.join("、")} 没有对应的画布资源，请重新选择引用后再生成`);
+}
+
+function inspectGenerationMentions(prompt: string, inputs: NodeGenerationInput[]) {
     const normalizedPrompt = normalizeGenerationNodeMentionTokens(prompt, inputs);
     const slotInputByToken = new Map(generationSlotEntries(inputs).map(({ token, input }) => [token, input]));
     const nodeInputById = new Map(inputs.filter((input) => !input.nodeId.startsWith("asset:")).map((input) => [input.nodeId, input]));
     const assetInputById = new Map(inputs.filter((input) => input.nodeId.startsWith("asset:")).map((input) => [input.nodeId.slice("asset:".length), input]));
+    const unresolved = new Set<string>();
+    let hasResolved = false;
     for (const match of normalizedPrompt.matchAll(GENERATION_MENTION_PATTERN)) {
-        if (resolveGenerationMention(normalizedPrompt, match, slotInputByToken, nodeInputById, assetInputById)) return true;
+        if (match[3]) {
+            const end = (match.index || 0) + match[0].length;
+            if (!hasMentionBoundary(normalizedPrompt, end)) continue;
+        }
+        if (resolveGenerationMention(normalizedPrompt, match, slotInputByToken, nodeInputById, assetInputById)) hasResolved = true;
+        else unresolved.add(match[0]);
     }
-    return false;
+    return { hasResolved, unresolved: [...unresolved] };
 }
 
 function generationSlotEntries(inputs: NodeGenerationInput[]) {
@@ -302,7 +325,14 @@ function hasMentionBoundary(value: string, index: number) {
 }
 
 export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]): NodeGenerationInput[] {
-    const resourceNodes = getGenerationResourceNodes(nodeId, nodes, connections);
+    return buildGenerationInputs(getGenerationResourceNodes(nodeId, nodes, connections), nodes, connections);
+}
+
+function buildNodeMentionGenerationInputs(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]): NodeGenerationInput[] {
+    return buildGenerationInputs(getMentionResourceNodes(nodeId, nodes, connections), nodes, connections);
+}
+
+function buildGenerationInputs(resourceNodes: CanvasNodeData[], nodes: CanvasNodeData[], connections: CanvasConnection[]): NodeGenerationInput[] {
     return resourceNodes.flatMap((node): NodeGenerationInput[] => {
         const character = readCharacterReference(node);
         if (character) return [{ nodeId: node.id, type: "character" as const, title: node.title, character }];
@@ -311,7 +341,7 @@ export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[
         // 调色节点在下游就是一张普通参考图，按 image 标签即正确。
         if (image) return [{ nodeId: node.id, type: "image" as const, sourceKind: image.source?.kind === "drawing" ? "drawing" : undefined, title: node.title, image }];
         const video = readReferenceVideo(node);
-        if (video) return [{ nodeId: node.id, type: "video" as const, title: node.title, video }];
+        if (video) return [{ nodeId: node.id, type: "video" as const, title: node.title, previewUrl: canvasNodeVideoPreviewUrl(node), video }];
         const audio = readReferenceAudio(node);
         if (audio) return [{ nodeId: node.id, type: "audio" as const, title: node.title, audio }];
         const text = readNodeTextInput(node);
@@ -320,12 +350,23 @@ export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[
     });
 }
 
+function mergeGenerationInputs(...groups: NodeGenerationInput[][]) {
+    const seen = new Set<string>();
+    return groups.flatMap((group) =>
+        group.filter((input) => {
+            if (seen.has(input.nodeId)) return false;
+            seen.add(input.nodeId);
+            return true;
+        }),
+    );
+}
+
 function buildAssetGenerationInputs(assets: Asset[]): NodeGenerationInput[] {
     return assets.flatMap((asset): NodeGenerationInput[] => {
         const nodeId = `asset:${asset.id}`;
         if (asset.kind === "text") return [{ nodeId, type: "text", title: asset.title, text: asset.data.content }];
         if (asset.kind === "image") return [{ nodeId, type: "image", title: asset.title, image: { id: asset.id, name: asset.title, type: asset.data.mimeType, dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, bytes: asset.data.bytes, width: asset.data.width, height: asset.data.height } }];
-        if (asset.kind === "video") return [{ nodeId, type: "video", title: asset.title, video: { id: asset.id, name: asset.title, type: asset.data.mimeType, url: asset.data.url, storageKey: asset.data.storageKey, bytes: asset.data.bytes, width: asset.data.width, height: asset.data.height, durationMs: asset.data.durationMs } }];
+        if (asset.kind === "video") return [{ nodeId, type: "video", title: asset.title, previewUrl: canvasVideoAssetPreviewUrl(asset.data.url, asset.coverUrl), video: { id: asset.id, name: asset.title, type: asset.data.mimeType, url: asset.data.url, storageKey: asset.data.storageKey, bytes: asset.data.bytes, width: asset.data.width, height: asset.data.height, durationMs: asset.data.durationMs } }];
         if (asset.kind === "audio") return [{ nodeId, type: "audio", title: asset.title, audio: { id: asset.id, name: asset.title, type: asset.data.mimeType, url: asset.data.url, storageKey: asset.data.storageKey, bytes: asset.data.bytes, durationMs: asset.data.durationMs } }];
         if (asset.kind === "entity" && asset.category === "character") return [{ nodeId, type: "character", title: asset.title, character: { nodeId, assetId: asset.id, requestedVersionId: asset.primaryVersionId } }];
         return [];
@@ -395,7 +436,7 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
     if (!context.characterReferences.length) return { ...context, referenceImages };
     if (!domainProjectId) throw new Error("角色引用未关联短剧项目，无法解析角色版本");
     const { getProjectCharacter } = await import("@/services/api/projects");
-    const { resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey } = await import("@/services/api/resources");
+    const { getResource, resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey } = await import("@/services/api/resources");
     const details = await Promise.all(context.characterReferences.map((reference) => getProjectCharacter(domainProjectId, reference.assetId)));
     const remainingBudget = Math.max(0, (referenceLimits?.maxImages ?? 9) - referenceImages.length);
     const selected = details.flatMap((detail) => {
@@ -453,13 +494,17 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
     }
     const maxAudios = referenceLimits?.maxAudios ?? 3;
     if (context.referenceAudios.length + voiceSamples.length > maxAudios) throw new Error(`当前模型参考音频容量不足：已连接 ${context.referenceAudios.length} 个音频，角色声音样本还需要 ${voiceSamples.length} 个名额`);
-    const characterVoiceAudios = voiceSamples.map((voice) => ({
-        id: `character-voice-${voice.assetId}`,
-        name: `${voice.characterName}-声音样本.mp3`,
-        type: "audio/mpeg",
-        url: resourceFileUrl(voice.sampleResourceId!),
-        storageKey: resourceStorageKey(voice.sampleResourceId!),
-    } satisfies ReferenceAudio));
+    const characterVoiceAudios = await Promise.all(voiceSamples.map(async (voice) => {
+        const resource = await getResource(voice.sampleResourceId!);
+        const extension = audioFileExtension(resource.mimeType, resource.objectKey);
+        return {
+            id: `character-voice-${voice.assetId}`,
+            name: `${voice.characterName}-声音样本.${extension}`,
+            type: resource.mimeType || "audio/mpeg",
+            url: resourceFileUrl(voice.sampleResourceId!),
+            storageKey: resourceStorageKey(voice.sampleResourceId!),
+        } satisfies ReferenceAudio;
+    }));
     const referenceAudios = [...context.referenceAudios, ...characterVoiceAudios];
     const voiceBlocks = mode === "video" ? resolvedCharacterVoices.map(compileResolvedVoicePrompt) : [];
     return {

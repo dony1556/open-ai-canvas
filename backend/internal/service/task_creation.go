@@ -13,6 +13,9 @@ import (
 // CreateTask 收敛任务进入系统前的 admission 流程：输入标准化、逻辑模型路由、
 // 能力/额度校验和持久化。执行阶段由 worker 与 provider 相关模块负责。
 func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task, error) {
+	if s.IsDraining() {
+		return nil, &AppError{Status: 503, Code: 503, Message: "服务正在维护，暂不接受新的生成任务", Retryable: true}
+	}
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
 		return nil, errors.New("prompt is required")
@@ -127,9 +130,11 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 }
 
 // resolveTaskModelSelection 根据请求实际携带的模型选择决定路由方式。
-// 显式系统渠道请求不能被全局前台模型开关误判，但仍必须通过渠道、模型和价格校验。
+// 显式系统渠道和用户自定义渠道请求不能被全局前台模型开关误判；
+// 它们仍分别进入系统目录校验或自定义渠道的功能、能力与安全校验。
 func (s *Service) resolveTaskModelSelection(input map[string]any, logicalModelID string, taskType string, operation string, frontendEnabled bool) (*RoutedModel, map[string]any, error) {
-	if frontendEnabled && !taskInputUsesSystemChannel(input) {
+	customChannelTask := taskInputUsesCustomChannel(input)
+	if frontendEnabled && !taskInputUsesSystemChannel(input) && !customChannelTask {
 		if logicalModelID == "" {
 			return nil, input, InvalidModelSelection("前台模型模式下必须指定 logicalModelId")
 		}
@@ -146,7 +151,7 @@ func (s *Service) resolveTaskModelSelection(input map[string]any, logicalModelID
 	}
 	// 自定义渠道没有系统 channelId；它会在后续由自定义渠道功能开关、
 	// 能力校验和 provider 配置校验共同处理，不能误报为“缺少系统渠道”。
-	if !taskInputUsesCustomChannel(input) {
+	if !customChannelTask {
 		if err := s.validateSystemChannelModelSelection(input); err != nil {
 			return nil, input, err
 		}

@@ -950,6 +950,58 @@ func TestRunImageTaskOmitsAutomaticQualityAndSize(t *testing.T) {
 	}
 }
 
+func TestRunOpenAIImageTaskUsesMultipartEditContract(t *testing.T) {
+	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/images/edits" {
+			t.Errorf("path = %q, want /v1/images/edits", r.URL.Path)
+		}
+		if contentType := r.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "multipart/form-data;") {
+			t.Errorf("Content-Type = %q, want multipart/form-data", contentType)
+		}
+		if err := r.ParseMultipartForm(2 << 20); err != nil {
+			t.Fatalf("ParseMultipartForm() error = %v", err)
+		}
+		if r.FormValue("model") != "gpt-image-2-high" || r.FormValue("prompt") != "make the reference clearer" || r.FormValue("n") != "1" {
+			t.Fatalf("form values = model:%q prompt:%q n:%q", r.FormValue("model"), r.FormValue("prompt"), r.FormValue("n"))
+		}
+		if r.FormValue("response_format") != "b64_json" || r.FormValue("output_format") != "png" || r.FormValue("size") != "1024x1024" {
+			t.Fatalf("format values = response_format:%q output_format:%q size:%q", r.FormValue("response_format"), r.FormValue("output_format"), r.FormValue("size"))
+		}
+		file, header, err := r.FormFile("image")
+		if err != nil {
+			t.Fatalf("FormFile(image) error = %v", err)
+		}
+		defer file.Close()
+		content, err := io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("ReadAll(image) error = %v", err)
+		}
+		if header.Filename != "reference-reference.png" || string(content) != "hello" {
+			t.Fatalf("image = filename:%q content:%q", header.Filename, string(content))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"aGVsbG8="}]}`))
+	}))
+	defer server.Close()
+
+	profile := DefaultImageCapabilityConfig("openai-image", "gpt-image-2-high")
+	result, err := runImageTask(context.Background(), canvasGenerationInput{
+		Mode:            "image",
+		Prompt:          "make the reference clearer",
+		Config:          providerConfig{BaseURL: server.URL, APIKey: "key", Model: "gpt-image-2-high", InterfaceType: "openai-image", Size: "1024x1024"},
+		ImageCapability: profile,
+		ReferenceImages: []providerMedia{{Name: "reference.png", Type: "image/png", DataURL: testReferenceImageDataURL}},
+	})
+	if err != nil {
+		t.Fatalf("runImageTask() error = %v", err)
+	}
+	images, _ := result["images"].([]map[string]string)
+	if len(images) != 1 || images[0]["dataUrl"] != "data:image/png;base64,aGVsbG8=" {
+		t.Fatalf("images = %#v", result["images"])
+	}
+}
+
 func TestRunGrokImageTaskUsesJSONEditContract(t *testing.T) {
 	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1320,6 +1372,31 @@ func TestSeedanceVideosBodyUsesOrderedFrameImageURLsWhenConfigured(t *testing.T)
 	}
 }
 
+func TestSeedanceVideosBodyKeepsProjectAssetsAsReferenceImages(t *testing.T) {
+	body, err := seedanceVideosRequestBody(canvasGenerationInput{
+		Prompt: "keep the character consistent",
+		Config: providerConfig{Model: "seedance-2.0"},
+		ReferenceImages: []providerMedia{
+			{ID: "character-1", DataURL: testReferenceImageDataURL},
+			{ID: "character-2", DataURL: "data:image/png;base64,d29ybGQ="},
+		},
+		Metadata: map[string]interface{}{
+			"videoEditOperation":    "reference_to_video",
+			"videoStartFrameNodeId": "character-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seedanceVideosRequestBody() error = %v", err)
+	}
+	want := []string{testReferenceImageDataURL, "data:image/png;base64,d29ybGQ="}
+	if !reflect.DeepEqual(body.ReferenceImageURLs, want) {
+		t.Fatalf("reference_image_urls = %#v, want %#v", body.ReferenceImageURLs, want)
+	}
+	if body.ImageURL != "" || body.ImageURLs != nil {
+		t.Fatalf("reference operation leaked frame fields: %#v", body)
+	}
+}
+
 func TestRunVideoTaskUsesNewAPIForAnyVideoModel(t *testing.T) {
 	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
 	paths := make([]string, 0, 3)
@@ -1679,6 +1756,22 @@ func TestXAIVideoBodyWithStartFrameKeepsOfficialImageShape(t *testing.T) {
 	}
 }
 
+func TestXAIVideoReferenceOperationIgnoresStaleStartFrameMetadata(t *testing.T) {
+	body, err := xaiVideoRequestBody(canvasGenerationInput{
+		Config: providerConfig{Model: "grok-imagine-video-1.5", InterfaceType: "xai-video"},
+		ReferenceImages: []providerMedia{
+			{ID: "character", DataURL: testReferenceImageDataURL},
+		},
+		Metadata: map[string]interface{}{"videoEditOperation": "reference_to_video", "videoStartFrameNodeId": "character"},
+	})
+	if err != nil {
+		t.Fatalf("xaiVideoRequestBody() error = %v", err)
+	}
+	if body.Image != nil || len(body.ReferenceImages) != 1 {
+		t.Fatalf("xAI reference operation body = %#v", body)
+	}
+}
+
 func TestXAIVideoBodyWithStartFrameRejectsMultipleImages(t *testing.T) {
 	_, err := xaiVideoRequestBody(canvasGenerationInput{
 		Config: providerConfig{Model: "grok-imagine-video-1.5", InterfaceType: "xai-video"},
@@ -1864,6 +1957,38 @@ func TestNewAPIChannel1VideoBodyMapsFramesAndReferences(t *testing.T) {
 	parameters := body["parameters"].(map[string]interface{})
 	if parameters["resolution"] != "1080P" || parameters["ratio"] != "9:16" || parameters["duration"] != 15 || parameters["watermark"] != true {
 		t.Fatalf("parameters = %#v", parameters)
+	}
+}
+
+func TestProtocolRequestPreservesVideoImageIDsAndRoles(t *testing.T) {
+	request := protocolRequestFromInput(canvasGenerationInput{
+		Mode: "video",
+		ReferenceImages: []providerMedia{
+			{ID: "start", URL: "https://example.com/start.png"},
+			{ID: "character", URL: "https://example.com/character.png"},
+		},
+		Metadata: map[string]interface{}{
+			"videoEditOperation":    "image_to_video",
+			"videoStartFrameNodeId": "start",
+		},
+	})
+	if len(request.Images) != 2 {
+		t.Fatalf("images = %#v", request.Images)
+	}
+	if request.Images[0].ID != "start" || request.Images[0].Role != "first_frame" {
+		t.Fatalf("start image = %#v", request.Images[0])
+	}
+	if request.Images[1].ID != "character" || request.Images[1].Role != "reference_image" {
+		t.Fatalf("unmarked image role = %#v", request.Images[1])
+	}
+
+	request = protocolRequestFromInput(canvasGenerationInput{
+		Mode:            "video",
+		ReferenceImages: []providerMedia{{ID: "character", URL: "https://example.com/character.png"}},
+		Metadata:        map[string]interface{}{"videoEditOperation": "reference_to_video", "videoStartFrameNodeId": "character"},
+	})
+	if request.Images[0].Role != "reference_image" {
+		t.Fatalf("reference operation image = %#v", request.Images[0])
 	}
 }
 
@@ -2455,6 +2580,49 @@ func TestRunMiniMaxVideoTaskCreatesPollsAndDownloads(t *testing.T) {
 	}
 	if got := strings.Join(paths, ","); got != "POST /v2/video_generation,GET /v2/query/video_generation/minimax-task-1,GET /video.mp4" {
 		t.Fatalf("paths = %q", got)
+	}
+}
+
+func TestRunMiniMaxVideoTaskUsesExplicitReferenceRoles(t *testing.T) {
+	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/video_generation":
+			var body miniMaxVideoRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if len(body.Content) != 3 || body.Content[1].Role != "reference_image" || body.Content[2].Role != "reference_audio" {
+				t.Errorf("content = %#v", body.Content)
+			}
+			if body.Ratio != "16:9" {
+				t.Errorf("ratio = %q, want 16:9 for reference mode", body.Ratio)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"task_id":"minimax-reference-task"}`))
+		case "GET /v2/query/video_generation/minimax-reference-task":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"task":{"status":"succeeded","content":{"url":"` + server.URL + `/video.mp4"}}}`))
+		case "GET /video.mp4":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("video"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	_, err := runVideoTask(context.Background(), canvasGenerationInput{
+		Mode:            "video",
+		Prompt:          "保持角色一致",
+		Config:          providerConfig{BaseURL: server.URL, APIKey: "test-key", Model: "MiniMax-H3", InterfaceType: "minimax-video", VideoSeconds: "6", VQuality: "768P", Size: "16:9"},
+		ReferenceImages: []providerMedia{{ID: "character-1", URL: server.URL + "/character.png"}},
+		ReferenceAudios: []providerMedia{{ID: "voice-1", URL: server.URL + "/voice.mp3"}},
+		Metadata:        map[string]interface{}{"videoEditOperation": "reference_to_video"},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

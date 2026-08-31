@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Button, Segmented, Tooltip } from "antd";
 import copyToClipboard from "copy-to-clipboard";
-import { Copy, FolderOpen, History, LoaderCircle, MessageSquareText, PlugZap, Plus, RefreshCw, RotateCcw, Terminal, Trash2 } from "lucide-react";
+import { CheckCircle2, Copy, ExternalLink, FolderOpen, History, LoaderCircle, PlugZap, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -25,8 +25,9 @@ import {
 import { canvasAgentPostconditionMessage, hashCanvasAgentSnapshot, previewCanvasAgentOps, summarizeCanvasAgentOps, verifyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasAgentContext, findCanvasAgentNodes, getCanvasAgentConnection, getCanvasAgentGenerationTasks, getCanvasAgentNode, getCanvasAgentResources, validateCanvasAgentOps } from "@/lib/canvas/canvas-agent-context";
 import { buildCanvasResourceReferences } from "@/lib/canvas/canvas-resource-references";
-import { resolveSkillMentions } from "@/lib/canvas/canvas-skill-mentions";
+import { buildLocalAgentSetupCommands, detectLocalAgentSetupPlatform, type LocalAgentSetupPlatform } from "@/lib/canvas/local-agent-setup";
 import { listAddedSkills, type Skill } from "@/services/api/skills";
+import { skillRuntime } from "@/services/skill-runtime";
 import { isProjectAgentReadTool, isProjectAgentToolName, runProjectAgentTool } from "@/services/api/project-agent-tools";
 import { AgentChatComposer, AgentChatMessage, AgentPendingToolCard, AgentWorkingMessage, type CanvasAgentChatAttachment } from "./canvas-agent-chat-ui";
 import { VoiceRecordingButton } from "@/components/conversation/voice-recording-button";
@@ -35,12 +36,7 @@ import { AgentChatEmptyState } from "./canvas-agent-panel-chrome";
 const PANEL_MOTION_SECONDS = 0.5;
 const MAX_ATTACHMENTS = 6;
 const MAX_ATTACHMENT_PAYLOAD_BYTES = 28 * 1024 * 1024;
-const AGENT_CONNECT_STEPS = [
-    { title: "从仓库安装插件", text: "插件暂未上架公共目录，请按项目 README 添加仓库 marketplace；安装后新建 Codex 对话。" },
-    { title: "自动连接本机 Runtime", text: "首次使用时，已信任的 Framefield 网页会自动建立当前浏览器的本机安全会话。" },
-    { title: "打开画布连接", text: "回到这里点击连接，画布会复用同一个本机 Runtime 安全会话。" },
-];
-
+const MAX_AGENT_TURN_PAYLOAD_BYTES = 56 * 1024 * 1024;
 type AgentEventPayload = {
     agent?: string;
     type?: string;
@@ -62,7 +58,7 @@ type AgentTurnPayload = {
     canvasId: string;
     threadId?: string;
     attachments: Array<Pick<AgentAttachment, "name" | "type" | "dataUrl">>;
-    skills: Array<{ skillId: string; name: string; description: string; instruction: string }>;
+    skills: Array<{ skillId: string; name: string; description: string; version: string; files: Array<{ path: string; mimeType: string; contentBase64: string }> }>;
 };
 
 export const CanvasLocalAgentPanel = memo(function CanvasLocalAgentPanel({
@@ -391,11 +387,22 @@ export const CanvasLocalAgentPanel = memo(function CanvasLocalAgentPanel({
     const sendPrompt = async (overrideText?: string) => {
         const text = (overrideText ?? prompt).trim();
         const files = attachments;
-        const mentionedSkills = resolveSkillMentions(text, composerSkills);
-        const requestPrompt = promptWithAttachments(text, files);
-        if (!connected || !requestPrompt || sending || waiting) return;
+        if (!connected || !promptWithAttachments(text, files) || sending || waiting) return;
         if (attachmentPayloadBytes(files) > MAX_ATTACHMENT_PAYLOAD_BYTES) {
             addMessage({ role: "error", title: "图片过大", text: "图片附件超过 30MB，请删减后再发送。" });
+            return;
+        }
+        let skillExecution: Awaited<ReturnType<typeof skillRuntime.prepare<"localAgent">>>;
+        try {
+            skillExecution = await skillRuntime.prepare({ profile: "localAgent", prompt: text, skills: composerSkills });
+        } catch (error) {
+            addMessage({ role: "error", title: "技能加载失败", text: error instanceof Error ? error.message : "无法读取技能包" });
+            return;
+        }
+        const requestPrompt = promptWithAttachments(skillExecution.prompt, files);
+        const skillBundles: AgentTurnPayload["skills"] = skillExecution.skills;
+        if (attachmentPayloadBytes(files) + skillBundlePayloadBytes(skillBundles) > MAX_AGENT_TURN_PAYLOAD_BYTES) {
+            addMessage({ role: "error", title: "本轮内容过大", text: "图片与技能包合计超过本地 Agent 单轮限制，请减少附件或只选择一个技能。" });
             return;
         }
         await submitTurn({
@@ -404,7 +411,7 @@ export const CanvasLocalAgentPanel = memo(function CanvasLocalAgentPanel({
             canvasId: snapshotRef.current.projectId,
             threadId: useCanvasAgentStore.getState().activeThreadId || undefined,
             attachments: files.map(({ name, type, dataUrl }) => ({ name, type, dataUrl })),
-            skills: mentionedSkills.map((skill) => ({ skillId: skill.skill_id, name: skill.skill_name, description: skill.description, instruction: skill.instruction || skill.description })),
+            skills: skillBundles,
         }, true);
     };
 
@@ -755,7 +762,15 @@ export const CanvasLocalAgentPanel = memo(function CanvasLocalAgentPanel({
                 </Tooltip>
             </div>
 
-            {activeTab === "history" ? (
+            {!connected ? (
+                <AgentConnectView
+                    theme={theme}
+                    enabled={enabled}
+                    activity={activity}
+                    connectError={connectError}
+                    onToggleEnabled={toggleAgentConnection}
+                />
+            ) : activeTab === "history" ? (
                 <AgentHistoryView
                     theme={theme}
                     threads={threads}
@@ -925,38 +940,37 @@ function AgentLogView({
 function AgentConnectView({
     theme,
     enabled,
-    connected,
     activity,
     connectError,
     onToggleEnabled,
 }: {
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
     enabled: boolean;
-    connected: boolean;
     activity: string;
     connectError: string;
     onToggleEnabled: () => void;
 }) {
-    const statusText = canvasAgentConnectionStatusText({ enabled, connected, activity, connectError });
-    const statusColor = statusText === "连接失败" ? "#dc2626" : connected ? "#16a34a" : enabled ? "#d97706" : theme.node.muted;
+    const { message } = App.useApp();
+    const [platform, setPlatform] = useState<LocalAgentSetupPlatform>(() => detectLocalAgentSetupPlatform());
+    const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+    const commands = buildLocalAgentSetupCommands(origin, platform);
+    const statusText = canvasAgentConnectionStatusText({ enabled, connected: false, activity, connectError });
+    const statusColor = connectError ? "#dc2626" : enabled ? "#d97706" : theme.node.muted;
+    const copyCommand = async (value: string, label: string) => {
+        if (await copyToClipboard(value)) {
+            message.success(`${label}已复制`);
+            return;
+        }
+        message.warning("复制失败，请手动复制");
+    };
     return (
         <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="space-y-4">
+            <div className="mx-auto w-full max-w-[620px] space-y-5 pb-4">
                 <div>
                     <div className="text-base font-semibold leading-6">连接本地 Agent</div>
                     <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
-                        安装仓库自带的 Codex 插件后，画布会优先自动连接本机 Agent。
+                        在这台电脑启动 Canvas Agent 后，网页会通过 127.0.0.1 建立本机安全连接。连接成功后，这里会自动恢复原对话。
                     </div>
-                </div>
-                <div className="space-y-2">
-                    {AGENT_CONNECT_STEPS.map((step) => (
-                        <div key={step.title} className="rounded-lg px-3 py-2.5">
-                            <div className="text-sm font-medium leading-5">{step.title}</div>
-                            <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
-                                {step.text}
-                            </div>
-                        </div>
-                    ))}
                 </div>
                 <div className="rounded-md p-3" style={{ background: theme.spatial.surface }}>
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -964,16 +978,16 @@ function AgentConnectView({
                             <div className="flex min-w-0 items-center gap-2">
                                 <span className="shrink-0 text-sm font-medium leading-5">网页连接</span>
                                 <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[var(--fs-label)] leading-4" style={{ background: theme.node.fill, color: statusColor }}>
-                                    <span className="size-1.5 shrink-0 rounded-full" style={{ background: statusColor }} />
+                                    {enabled ? <LoaderCircle className="size-3 shrink-0 animate-spin" /> : <span className="size-1.5 shrink-0 rounded-full" style={{ background: statusColor }} />}
                                     <span className="truncate">{statusText}</span>
                                 </span>
                             </div>
                             <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
-                                自动复用“设置 → 本机工具”建立的短期安全会话。
+                                {enabled ? "正在检测本机 127.0.0.1:17371；服务启动后会自动连接。" : "先完成下面两步，再点击连接。"}
                             </div>
                         </div>
                         <Button className="!h-8 !px-3" type={enabled ? "default" : "primary"} icon={<PlugZap className="size-4" />} onClick={onToggleEnabled}>
-                            {enabled ? "断开" : "连接"}
+                            {enabled ? "停止重试" : connectError ? "重新连接" : "开始连接"}
                         </Button>
                     </div>
                     <div className="mt-3 grid gap-2.5">
@@ -984,7 +998,84 @@ function AgentConnectView({
                         ) : null}
                     </div>
                 </div>
+
+                <div>
+                    <section className="border-b pb-4" style={{ borderColor: theme.node.stroke }}>
+                        <div className="flex items-start gap-3">
+                            <span className="grid size-6 shrink-0 place-items-center rounded-full text-xs font-semibold" style={{ background: theme.node.fill, color: theme.node.text }}>1</span>
+                            <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-sm font-medium leading-5">安装本机 Runtime</div>
+                                        <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>需要 Git、Node.js 18+。当前版本从 GitHub 源码安装。</div>
+                                    </div>
+                                    <Segmented
+                                        size="small"
+                                        value={platform}
+                                        options={[
+                                            { label: "macOS / Linux", value: "unix" },
+                                            { label: "Windows", value: "windows" },
+                                        ]}
+                                        onChange={(value) => setPlatform(value as LocalAgentSetupPlatform)}
+                                    />
+                                </div>
+                                <CommandBlock value={commands.install} theme={theme} onCopy={() => copyCommand(commands.install, "安装命令")} />
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="border-b py-4" style={{ borderColor: theme.node.stroke }}>
+                        <div className="flex items-start gap-3">
+                            <span className="grid size-6 shrink-0 place-items-center rounded-full text-xs font-semibold" style={{ background: theme.node.fill, color: theme.node.text }}>2</span>
+                            <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium leading-5">启动并授权当前站点</div>
+                                <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
+                                    命令已绑定 <span className="font-mono">{origin}</span>。保持终端运行，再回到上方开始连接。
+                                </div>
+                                <CommandBlock value={commands.start} theme={theme} onCopy={() => copyCommand(commands.start, "启动命令")} />
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="pt-4">
+                        <div className="flex items-start gap-3">
+                            <span className="grid size-6 shrink-0 place-items-center rounded-full" style={{ background: theme.node.fill, color: theme.node.text }}><CheckCircle2 className="size-3.5" /></span>
+                            <div className="min-w-0 flex-1 text-xs leading-5" style={{ color: theme.node.muted }}>
+                                <div className="text-sm font-medium" style={{ color: theme.node.text }}>当前支持范围</div>
+                                <div className="mt-1">网页侧边栏使用 Codex；外部 MCP 已提供 Codex 与 Claude Code 接入。Hermes、WorkBuddy 尚未验证。Codex 需要已登录或配置可用凭据。</div>
+                                <Button type="link" size="small" className="mt-1 !h-7 !px-0" href="https://github.com/ddcat-ai/open-ai-canvas/tree/main/canvas-agent" target="_blank" rel="noreferrer" icon={<ExternalLink className="size-3.5" />}>
+                                    查看完整说明
+                                </Button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
             </div>
+        </div>
+    );
+}
+
+function CommandBlock({
+    value,
+    theme,
+    onCopy,
+}: {
+    value: string;
+    theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    onCopy: () => void | Promise<void>;
+}) {
+    return (
+        <div className="mt-3 overflow-hidden rounded-md" style={{ background: "rgba(0,0,0,.22)" }}>
+            <div className="flex items-center justify-between gap-2 border-b px-3 py-1.5" style={{ borderColor: theme.node.stroke }}>
+                <span className="inline-flex items-center gap-1.5 text-[var(--fs-label)]" style={{ color: theme.node.muted }}>
+                    <Terminal className="size-3.5" />
+                    终端命令
+                </span>
+                <Button type="text" size="small" className="!h-6 !px-1.5" icon={<Copy className="size-3.5" />} onClick={() => void onCopy()} aria-label="复制终端命令">
+                    复制
+                </Button>
+            </div>
+            <pre className="thin-scrollbar overflow-x-auto whitespace-pre p-3 font-mono text-[11px] leading-5" style={{ color: theme.node.text }}>{value}</pre>
         </div>
     );
 }
@@ -1304,6 +1395,10 @@ function promptWithAttachments(text: string, attachments: AgentAttachment[]) {
 
 function attachmentPayloadBytes(attachments: AgentAttachment[]) {
     return attachments.reduce((total, item) => total + item.dataUrl.length, 0);
+}
+
+function skillBundlePayloadBytes(skills: AgentTurnPayload["skills"]) {
+    return skills.reduce((total, skill) => total + skill.files.reduce((fileTotal, file) => fileTotal + file.contentBase64.length, 0), 0);
 }
 
 function formatBytes(bytes: number) {
