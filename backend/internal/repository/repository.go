@@ -26,6 +26,8 @@ var ErrTextReplayQuotaExceeded = errors.New("text replay quota exceeded")
 
 var ErrTextReplayClosed = errors.New("text replay task is closed")
 
+var ErrEmailVerificationCodeInvalid = errors.New("email verification code is no longer valid")
+
 var ErrProjectAssetFolderNotEmpty = errors.New("project asset folder is not empty")
 
 var ErrProjectHasActiveTasks = errors.New("project has active tasks")
@@ -304,6 +306,36 @@ func (r *Repository) CreateUserWithEmailVerification(user *model.User, verificat
 			return errors.New("email verification code is no longer valid")
 		}
 		return tx.Create(user).Error
+	})
+}
+
+func (r *Repository) ResetUserPasswordWithEmailVerification(userID string, email string, purpose string, verificationCodeID string, passwordHash string, usedAt time.Time) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		codeResult := tx.Model(&model.EmailVerificationCode{}).
+			Where("id = ? AND email = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?", verificationCodeID, email, purpose, usedAt).
+			Update("used_at", usedAt)
+		if codeResult.Error != nil {
+			return codeResult.Error
+		}
+		if codeResult.RowsAffected != 1 {
+			return ErrEmailVerificationCodeInvalid
+		}
+
+		userResult := tx.Model(&model.User{}).
+			Where("id = ? AND email <> '' AND lower(email) = lower(?) AND status = ? AND password_hash <> ''", userID, email, model.UserStatusActive).
+			Updates(map[string]any{"password_hash": passwordHash, "updated_at": usedAt})
+		if userResult.Error != nil {
+			return userResult.Error
+		}
+		if userResult.RowsAffected != 1 {
+			return ErrEmailVerificationCodeInvalid
+		}
+		if err := tx.Delete(&model.AuthSession{}, "user_id = ?", userID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.EmailVerificationCode{}).
+			Where("email = ? AND purpose = ? AND used_at IS NULL", email, purpose).
+			Update("used_at", usedAt).Error
 	})
 }
 
@@ -2007,6 +2039,11 @@ func (r *Repository) CreateProjectAssetCandidates(candidates []model.ProjectAsse
 		return nil
 	}
 	return r.db.Create(&candidates).Error
+}
+
+func (r *Repository) CreateProjectAssetCandidate(candidate *model.ProjectAssetCandidate) (bool, error) {
+	result := r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(candidate)
+	return result.RowsAffected == 1, result.Error
 }
 
 // ConfirmProjectAssetCandidate 将正式资产身份、首版本、项目引用和候选状态放在同一事务中，避免出现半确认数据。
