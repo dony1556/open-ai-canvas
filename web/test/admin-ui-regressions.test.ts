@@ -45,7 +45,10 @@ test("analytics keeps fixed range presets distinct and uses enabled channel mode
     expect(source).toContain("onChange={handlePricingModelChange}");
     expect(source).toContain('hasOwnProperty.call(changedValues, "model")');
     expect(source).toContain('if (matchingChannels.length) form.setFieldValue("channelId", matchingChannels[0].id)');
-    expect(source).toContain("const sourceChannels = channels.filter((channel) => channel.enabled !== false)");
+    expect(source).toContain("const sourceChannels = channels.filter(");
+    expect(source).toContain('Form.useWatch("channelId", form)');
+    expect(source).toContain("pricingChannelId");
+    expect(source).toContain("channel.id === pricingChannelId");
     expect(source).toContain('inputMode="decimal"');
     expect(source).toContain('className="admin-analytics-price-input"');
     expect(source).toContain('className="admin-analytics-price-field"');
@@ -189,9 +192,15 @@ test("request logs display user credit billing independently from upstream cost"
 
     const billingSummary = sourceSection(listSource, "function BillingSummary", "function MediaResult");
     expect(listSource).toContain('title: "积分计费"');
+    expect(listSource).toContain('title: "请求阶段 / 状态"');
+    expect(listSource).toContain('description="模型生成、状态查询与结果下载；仅计费调用扣除积分"');
     expect(billingSummary).toContain("billingAmountMicrocredits");
     expect(billingSummary).toContain("billingAvailable");
+    expect(billingSummary).toContain("!log.billable");
+    expect(billingSummary).toContain("不计费");
     expect(billingSummary).not.toContain("costAvailable");
+    expect(detailSource).toContain('["请求阶段", requestKindText(log.requestKind)]');
+    expect(detailSource).toContain('["计费属性", log.billable ? "计费调用" : "不计费"]');
     expect(detailSource).toContain('["积分计费", billingText(log)]');
     expect(detailSource).toContain('["上游成本", log.costAvailable');
     expect(apiSource).toContain("billingAmountMicrocredits: number");
