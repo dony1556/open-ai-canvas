@@ -1,6 +1,7 @@
 import { ConfigProvider, Dropdown, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import {
+    Activity,
     ArrowLeft,
     BarChart3,
     BellRing,
@@ -33,7 +34,7 @@ import {
     ToggleLeft,
     UsersRound,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 
 import { AppChangelogButton } from "@/components/layout/app-changelog-modal";
@@ -84,10 +85,11 @@ const adminNavigation: Array<{ label: string; items: AdminNavigationItem[] }> = 
     {
         label: "系统配置",
         items: [
-            { path: "/admin/settings/appearance", label: "外观管理", description: "品牌、Logo 与登录影片", icon: <Palette className="size-4" /> },
+            { path: "/admin/settings/appearance", label: "站点及外观", description: "品牌、SEO、备案与皮肤", icon: <Palette className="size-4" /> },
             { path: "/admin/settings/features", label: "功能开放", description: "工作台、插件与模型能力", icon: <ToggleLeft className="size-4" /> },
             { path: "/admin/settings/drawing-engine", label: "绘图工具", description: "画布绘图节点默认引擎", icon: <Paintbrush className="size-4" /> },
             { path: "/admin/settings/runtime-policy", label: "资源与策略", description: "配额、并发、频控与超时", icon: <Settings2 className="size-4" /> },
+            { path: "/admin/settings/system-performance", label: "系统性能", description: "主机、数据库与缓存状态", icon: <Activity className="size-4" /> },
             { path: "/admin/settings/access", label: "登录与注册", description: "账号创建与第三方登录", icon: <ShieldCheck className="size-4" /> },
             { path: "/admin/settings/email", label: "邮件服务", description: "注册验证码与 SMTP", icon: <Mail className="size-4" /> },
             { path: "/admin/settings/storage", label: "存储服务", description: "对象存储与资源存储", icon: <HardDrive className="size-4" /> },
@@ -127,7 +129,7 @@ export function AdminShell() {
     };
 
     return (
-        <ConfigProvider theme={getAdminAntThemeConfig(dark)}>
+        <ConfigProvider theme={getAdminAntThemeConfig(dark, appearance.activeSkin)}>
             <main className="admin-shell app-user-workspace flex h-full min-h-0 overflow-hidden text-foreground">
                 <aside className={cn("app-workspace-sidebar admin-sidebar hidden shrink-0 flex-col overflow-hidden lg:flex", collapsed && "is-collapsed")}>
                     <div className="admin-sidebar-identity shrink-0">
@@ -164,7 +166,15 @@ export function AdminShell() {
                 </Tooltip>
                 <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
                     <MobileAdminNavigation />
-                    <Outlet />
+                    <Suspense
+                        fallback={
+                            <div className="p-8 text-sm text-foreground/60" role="status">
+                                正在加载管理页面…
+                            </div>
+                        }
+                    >
+                        <Outlet />
+                    </Suspense>
                 </section>
             </main>
         </ConfigProvider>

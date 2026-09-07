@@ -46,11 +46,17 @@ type canvasGenerationInput struct {
 	Mask            *providerMedia         `json:"mask"`
 	Metadata        map[string]interface{} `json:"metadata"`
 	AgentRequests   *agentToolRequests     `json:"agentRequests"`
+	TextOptions     canvasTextOptions      `json:"textOptions"`
 	ImageCapability *ImageCapabilityConfig `json:"-"`
 	StreamText      bool                   `json:"-"` // 分镜请求使用上游 SSE 保活；最终结构仍在流结束后统一校验。
 	MaxOutputTokens int                    `json:"-"`
 	OnTextDelta     func(string)           `json:"-"`
 	VideoCapability *VideoCapabilityConfig `json:"-"`
+}
+
+type canvasTextOptions struct {
+	Stream   *bool `json:"stream"`
+	Thinking bool  `json:"thinking"`
 }
 
 type agentToolRequests struct {
@@ -149,6 +155,17 @@ type providerHTTPError struct {
 	Body       string
 	RetryAfter time.Duration
 }
+
+type providerStatePendingError struct {
+	TaskID string
+	Cause  error
+}
+
+func (e providerStatePendingError) Error() string {
+	return fmt.Sprintf("上游任务状态尚未同步，将继续查询原任务（任务 %s）", e.TaskID)
+}
+
+func (e providerStatePendingError) Unwrap() error { return e.Cause }
 
 type providerAnalyticsKey struct{}
 type providerOutboundPolicyKey struct{}
@@ -335,8 +352,10 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 	ctx = withProviderOutboundPolicy(ctx, input.Config)
 	var textPublisher *taskTextStreamPublisher
 	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") {
+		input.StreamText = input.TextOptions.Stream == nil || *input.TextOptions.Stream
+	}
+	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") && input.StreamText {
 		textPublisher = newTaskTextStreamPublisher(s, userID, taskExecutionID(ctx))
-		input.StreamText = true
 		input.OnTextDelta = textPublisher.Publish
 		defer textPublisher.Close()
 	}
@@ -673,6 +692,8 @@ func parseAgentToolPayload(payload map[string]interface{}, protocol string) (map
 			switch stringField(item, "type") {
 			case "text":
 				result["text"] = result["text"].(string) + stringField(item, "text")
+			case "thinking":
+				result["reasoning"] = resultString(result, "reasoning") + firstNonEmptyString(stringField(item, "thinking"), stringField(item, "text"))
 			case "tool_use":
 				arguments, err := json.Marshal(item["input"])
 				if err != nil {
@@ -885,6 +906,8 @@ func (p *streamingAgentParser) consumeClaudeEvent(payload map[string]interface{}
 		switch stringField(block, "type") {
 		case "text":
 			p.appendText(stringField(block, "text"))
+		case "thinking":
+			p.reasoning.WriteString(firstNonEmptyString(stringField(block, "thinking"), stringField(block, "text")))
 		case "tool_use":
 			arguments := ""
 			if input := block["input"]; input != nil {
@@ -900,6 +923,9 @@ func (p *streamingAgentParser) consumeClaudeEvent(payload map[string]interface{}
 		if stringField(delta, "type") == "text_delta" {
 			p.appendText(stringField(delta, "text"))
 		}
+		if stringField(delta, "type") == "thinking_delta" {
+			p.reasoning.WriteString(firstNonEmptyString(stringField(delta, "thinking"), stringField(delta, "text")))
+		}
 		if stringField(delta, "type") == "input_json_delta" {
 			p.toolCall(index).arguments += stringField(delta, "partial_json")
 		}
@@ -907,6 +933,11 @@ func (p *streamingAgentParser) consumeClaudeEvent(payload map[string]interface{}
 		errValue, _ := payload["error"].(map[string]interface{})
 		p.err = errors.New(defaultString(stringField(errValue, "message"), "Claude 上游返回失败"))
 	}
+}
+
+func resultString(value map[string]interface{}, key string) string {
+	text, _ := value[key].(string)
+	return text
 }
 
 func (p *streamingAgentParser) appendText(delta string) {
@@ -2006,8 +2037,9 @@ func runLegacyTextTask(ctx context.Context, input canvasGenerationInput) (map[st
 		return nil, err
 	}
 	body := map[string]interface{}{"model": input.Config.Model, "input": responseInput}
+	applyTextThinking(body, input, "responses")
 	applyTextOutputLimit(body, input.MaxOutputTokens, "max_output_tokens")
-	text, err := requestTextProvider(ctx, input.Config, "/responses", body, "responses", input.StreamText, input.OnTextDelta)
+	result, err := requestTextProvider(ctx, input.Config, "/responses", body, "responses", input.StreamText, input.OnTextDelta)
 	if err != nil {
 		if !shouldFallbackTextToChat(err) {
 			return nil, err
@@ -2018,7 +2050,7 @@ func runLegacyTextTask(ctx context.Context, input canvasGenerationInput) (map[st
 		}
 		return nil, fmt.Errorf("文本接口请求失败：Responses API %v；Chat Completions %v", err, chatErr)
 	}
-	return map[string]interface{}{"mode": "text", "text": text}, nil
+	return providerTextTaskResult(result), nil
 }
 
 func runResponsesTextTask(ctx context.Context, input canvasGenerationInput) (map[string]interface{}, error) {
@@ -2027,12 +2059,13 @@ func runResponsesTextTask(ctx context.Context, input canvasGenerationInput) (map
 		return nil, err
 	}
 	body := map[string]interface{}{"model": input.Config.Model, "input": responseInput}
+	applyTextThinking(body, input, "responses")
 	applyTextOutputLimit(body, input.MaxOutputTokens, "max_output_tokens")
-	text, err := requestTextProvider(ctx, input.Config, "/responses", body, "responses", input.StreamText, input.OnTextDelta)
+	result, err := requestTextProvider(ctx, input.Config, "/responses", body, "responses", input.StreamText, input.OnTextDelta)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"mode": "text", "text": text}, nil
+	return providerTextTaskResult(result), nil
 }
 
 func runChatCompletionsTextTask(ctx context.Context, input canvasGenerationInput) (map[string]interface{}, error) {
@@ -2047,12 +2080,13 @@ func runChatCompletionsTextTask(ctx context.Context, input canvasGenerationInput
 	}
 	messages = append(messages, map[string]interface{}{"role": "user", "content": userContent})
 	body := map[string]interface{}{"model": input.Config.Model, "messages": messages}
+	applyTextThinking(body, input, "chat-completion")
 	applyTextOutputLimit(body, input.MaxOutputTokens, "max_tokens")
-	text, err := requestTextProvider(ctx, input.Config, "/chat/completions", body, "chat-completion", input.StreamText, input.OnTextDelta)
+	result, err := requestTextProvider(ctx, input.Config, "/chat/completions", body, "chat-completion", input.StreamText, input.OnTextDelta)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"mode": "text", "text": text}, nil
+	return providerTextTaskResult(result), nil
 }
 
 func runClaudeTextTask(ctx context.Context, input canvasGenerationInput) (map[string]interface{}, error) {
@@ -2073,14 +2107,42 @@ func runClaudeTextTask(ctx context.Context, input canvasGenerationInput) (map[st
 		maxTokens = input.MaxOutputTokens
 	}
 	body := map[string]interface{}{"model": input.Config.Model, "max_tokens": maxTokens, "messages": messages}
+	applyTextThinking(body, input, "claude-api")
 	if systemPrompt := strings.TrimSpace(input.Config.SystemPrompt); systemPrompt != "" {
 		body["system"] = systemPrompt
 	}
-	text, err := requestTextProvider(ctx, input.Config, "/messages", body, "claude-api", input.StreamText, input.OnTextDelta)
+	result, err := requestTextProvider(ctx, input.Config, "/messages", body, "claude-api", input.StreamText, input.OnTextDelta)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"mode": "text", "text": text}, nil
+	return providerTextTaskResult(result), nil
+}
+
+func applyTextThinking(body map[string]interface{}, input canvasGenerationInput, protocol string) {
+	if !input.TextOptions.Thinking {
+		return
+	}
+	switch protocol {
+	case "responses":
+		body["reasoning"] = map[string]interface{}{"effort": "medium", "summary": "auto"}
+	case "chat-completion":
+		body["reasoning_effort"] = "medium"
+	case "claude-api":
+		body["thinking"] = map[string]interface{}{"type": "enabled", "budget_tokens": 1024}
+	}
+}
+
+type providerTextResult struct {
+	Text      string
+	Reasoning string
+}
+
+func providerTextTaskResult(result providerTextResult) map[string]interface{} {
+	payload := map[string]interface{}{"mode": "text", "text": result.Text}
+	if strings.TrimSpace(result.Reasoning) != "" {
+		payload["reasoning"] = result.Reasoning
+	}
+	return payload
 }
 
 func applyTextOutputLimit(body map[string]interface{}, limit int, field string) {
@@ -2297,10 +2359,32 @@ func runDeclarativeProtocolTask(ctx context.Context, input canvasGenerationInput
 	return runProtocolAdapterTask(ctx, input, adapter)
 }
 
+type protocolPollTiming struct {
+	InitialDelay            time.Duration
+	PollInterval            time.Duration
+	TaskNotExistWindow      time.Duration
+	TaskNotExistMaxMisses   int
+	TaskNotExistRetryDelays []time.Duration
+}
+
+var defaultProtocolPollTiming = protocolPollTiming{
+	InitialDelay:            2 * time.Second,
+	PollInterval:            2500 * time.Millisecond,
+	TaskNotExistWindow:      15 * time.Second,
+	TaskNotExistMaxMisses:   5,
+	TaskNotExistRetryDelays: []time.Duration{2 * time.Second, 3 * time.Second, 5 * time.Second, 5 * time.Second},
+}
+
 func runProtocolAdapterTask(ctx context.Context, input canvasGenerationInput, adapter protocol.Adapter) (map[string]interface{}, error) {
+	return runProtocolAdapterTaskWithTiming(ctx, input, adapter, defaultProtocolPollTiming)
+}
+
+func runProtocolAdapterTaskWithTiming(ctx context.Context, input canvasGenerationInput, adapter protocol.Adapter, timing protocolPollTiming) (map[string]interface{}, error) {
 	request := protocolRequestFromInput(input)
 	taskID := resumedProviderRequestID(ctx)
 	var created protocol.CreateResult
+	createdProviderTask := false
+	syncWindowStartedAt := time.Now()
 	if taskID == "" {
 		spec, err := adapter.BuildCreate(ctx, protocol.RequestContext{BaseURL: input.Config.BaseURL, Request: request})
 		if err != nil {
@@ -2324,8 +2408,16 @@ func runProtocolAdapterTask(ctx context.Context, input canvasGenerationInput, ad
 		if taskID == "" {
 			return nil, errors.New("声明式协议创建请求没有返回任务 ID")
 		}
+		createdProviderTask = true
+		syncWindowStartedAt = time.Now()
+	}
+	if createdProviderTask && input.Config.InterfaceType == string(model.ChannelInterfaceNewAPIChannel2) {
+		if err := sleepContext(ctx, timing.InitialDelay); err != nil {
+			return nil, err
+		}
 	}
 
+	taskNotExistMisses := 0
 	for deadline := providerPollingDeadline(ctx); time.Now().Before(deadline); {
 		spec, err := adapter.BuildPoll(ctx, protocol.PollContext{BaseURL: input.Config.BaseURL, Model: request.Model, Request: request, TaskID: taskID})
 		if err != nil {
@@ -2333,8 +2425,26 @@ func runProtocolAdapterTask(ctx context.Context, input canvasGenerationInput, ad
 		}
 		body, err := executeProtocolRequest(withProviderRequestKind(ctx, "poll"), input.Config, spec)
 		if err != nil {
+			if isNewAPIChannel2TaskNotReady(input.Config.InterfaceType, taskID, err) {
+				taskNotExistMisses++
+				maxMisses := timing.TaskNotExistMaxMisses
+				if maxMisses <= 0 {
+					maxMisses = len(timing.TaskNotExistRetryDelays) + 1
+				}
+				if time.Since(syncWindowStartedAt) >= timing.TaskNotExistWindow || taskNotExistMisses >= maxMisses {
+					return nil, providerStatePendingError{TaskID: taskID, Cause: err}
+				}
+				delayIndex := min(taskNotExistMisses-1, len(timing.TaskNotExistRetryDelays)-1)
+				if delayIndex >= 0 {
+					if sleepErr := sleepContext(ctx, timing.TaskNotExistRetryDelays[delayIndex]); sleepErr != nil {
+						return nil, sleepErr
+					}
+				}
+				continue
+			}
 			return nil, err
 		}
+		taskNotExistMisses = 0
 		state, err := adapter.ParsePoll(ctx, protocol.PollContext{BaseURL: input.Config.BaseURL, Model: request.Model, Request: request, TaskID: taskID}, body)
 		if err != nil {
 			return nil, err
@@ -2348,11 +2458,27 @@ func runProtocolAdapterTask(ctx context.Context, input canvasGenerationInput, ad
 		case protocol.StatusFailed, protocol.StatusCancelled:
 			return nil, protocolResultError(state.Message, taskID)
 		}
-		if err := sleepContext(ctx, 2500*time.Millisecond); err != nil {
+		if err := sleepContext(ctx, timing.PollInterval); err != nil {
 			return nil, err
 		}
 	}
 	return nil, fmt.Errorf("声明式协议任务超时（任务 %s）", taskID)
+}
+
+func isNewAPIChannel2TaskNotReady(interfaceType string, taskID string, err error) bool {
+	if strings.TrimSpace(interfaceType) != string(model.ChannelInterfaceNewAPIChannel2) || strings.TrimSpace(taskID) == "" {
+		return false
+	}
+	var httpErr providerHTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	var payload map[string]any
+	if json.Unmarshal([]byte(httpErr.Body), &payload) != nil {
+		return false
+	}
+	code, message := providerFailureDetails(payload)
+	return strings.EqualFold(strings.TrimSpace(code), "task_not_exist") || strings.EqualFold(strings.TrimSpace(message), "task_not_exist")
 }
 
 // queryProtocolAdapterVideoTask performs exactly one read of an existing
@@ -4564,51 +4690,41 @@ func runSeedanceAgentPlanVideoTask(ctx context.Context, input canvasGenerationIn
 	return nil, fmt.Errorf("%s视频生成超时", providerName)
 }
 
-func requestTextProvider(ctx context.Context, config providerConfig, path string, body map[string]interface{}, protocol string, stream bool, onDelta func(string)) (string, error) {
+func requestTextProvider(ctx context.Context, config providerConfig, path string, body map[string]interface{}, protocol string, stream bool, onDelta func(string)) (providerTextResult, error) {
 	if stream {
-		metadata, _ := ctx.Value(providerAnalyticsKey{}).(providerAnalyticsContext)
-		if protocol == "chat-completion" && metadata.BillingMode == "token" {
-			if err := ensureChatCompletionStreamUsage(body); err != nil {
-				return "", err
-			}
-		}
-		return postStreamingText(ctx, config, path, body, protocol, onDelta)
+		return postStreamingTextResult(ctx, config, path, body, protocol, onDelta)
 	}
 	var payload map[string]interface{}
 	if err := postJSON(ctx, config, path, body, &payload); err != nil {
-		return "", err
+		return providerTextResult{}, err
 	}
-	text := extractTextPayload(payload, protocol)
-	if text == "" {
-		return "", errors.New("文本接口没有返回内容")
+	parsed, err := parseAgentToolPayload(payload, protocol)
+	if err != nil {
+		return providerTextResult{}, err
 	}
-	return text, nil
+	result := providerTextResult{Text: stringField(parsed, "text"), Reasoning: stringField(parsed, "reasoning")}
+	if result.Text == "" {
+		return providerTextResult{}, errors.New("文本接口没有返回内容")
+	}
+	return result, nil
 }
 
 func postStreamingText(ctx context.Context, config providerConfig, path string, body map[string]interface{}, protocol string, onDelta func(string)) (string, error) {
-	// 只把分镜规划/修复切到上游 SSE，完整 JSON 仍在流结束后校验，避免半截结构污染画布。
-	body["stream"] = true
-	parser := newStreamingTextDeltaParser(protocol, onDelta)
-	data, mimeType, err := postStreamingBinary(ctx, config, path, body, parser.consume)
+	result, err := postStreamingTextResult(ctx, config, path, body, protocol, onDelta)
+	return result.Text, err
+}
+
+func postStreamingTextResult(ctx context.Context, config providerConfig, path string, body map[string]interface{}, protocol string, onDelta func(string)) (providerTextResult, error) {
+	// 文本创作与 Agent 共用同一套 SSE 解析，确保正文、推理摘要和供应商错误语义一致。
+	parsed, err := postStreamingAgent(ctx, config, path, body, protocol, onDelta)
 	if err != nil {
-		return "", err
+		return providerTextResult{}, err
 	}
-	parser.flush()
-	if !strings.Contains(strings.ToLower(mimeType), "event-stream") {
-		var payload map[string]interface{}
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return "", fmt.Errorf("流式文本接口返回格式无效：%w", err)
-		}
-		if err := validateTextPayload(payload); err != nil {
-			return "", err
-		}
-		text := extractTextPayload(payload, protocol)
-		if text == "" {
-			return "", errors.New("文本接口没有返回内容")
-		}
-		return text, nil
+	result := providerTextResult{Text: stringField(parsed, "text"), Reasoning: stringField(parsed, "reasoning")}
+	if result.Text == "" {
+		return providerTextResult{}, errors.New("流式文本接口没有返回内容")
 	}
-	return parseTextEventStream(data, protocol)
+	return result, nil
 }
 
 func extractTextPayload(payload map[string]interface{}, protocol string) string {
