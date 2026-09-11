@@ -1,9 +1,11 @@
 import type { CanvasColorGrade } from "@/lib/canvas/canvas-color-grade";
+import type { MediaConversionNodeState } from "@/lib/media-conversion/contracts";
 import type { AssetCategory } from "@/lib/asset-category";
 import type { PortraitTextureSettings } from "@/lib/canvas/canvas-portrait-texture";
 import type { StyleExecutionPlan } from "@/lib/canvas/style-profile";
 import type { PortraitClearanceNodeState } from "@/lib/portrait-clearance/contracts";
 import type { ArtCritiqueNodeState } from "@/lib/art-critique/contracts";
+import type { CameraControlOptions } from "@/lib/canvas/camera-prompt-library";
 import type { SrtEntry, SubtitleHighlight, SubtitleStyle } from "@/types/timeline";
 
 export type Position = {
@@ -34,6 +36,7 @@ export enum CanvasNodeType {
     Compare = "compare",
     Chart = "chart",
     ColorGrade = "colorgrade",
+    MediaConversion = "media-conversion",
 }
 
 /** Runtime IDs contributed by plugins share the persisted node type field. */
@@ -210,6 +213,9 @@ export type CanvasNodeMetadata = {
     promptTemplateOperation?: string;
     promptTemplateVariables?: Record<string, string>;
     status?: CanvasNodeStatus;
+    /** 浏览器文件上传，与模型生成任务状态独立。 */
+    fileUpload?: "uploading" | "error";
+    fileUploadProgress?: number;
     locked?: boolean;
     errorDetails?: string;
     generationErrorCode?: string;
@@ -359,6 +365,8 @@ export type CanvasNodeMetadata = {
     chartKind?: "bar" | "line";
     /** 调色节点的参数；缺省视为未调色。 */
     colorGrade?: CanvasColorGrade;
+    /** 本地图片/视频转换节点的参数、来源指纹和结果状态。 */
+    mediaConversion?: MediaConversionNodeState;
     /** 用户手动拉伸过尺寸；图片按真实比例自动适配时避让它。 */
     manualSize?: boolean;
     storyboard?: StoryboardData;
@@ -422,6 +430,8 @@ export type CanvasNodeMetadata = {
     portraitClearance?: PortraitClearanceNodeState;
     /** AI 审美批改节点只保存当前报告和输入指纹，不保存图片二进制。 */
     artCritique?: ArtCritiqueNodeState;
+    /** 摄像机控制选项，启用后生成时自动追加摄影机/镜头/焦距/光圈提示词。 */
+    cameraControl?: CameraControlOptions;
 };
 
 export type CanvasNodeData = {

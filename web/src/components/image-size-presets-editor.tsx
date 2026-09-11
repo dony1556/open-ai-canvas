@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { Button, Input } from "antd";
 import { Check, Plus } from "lucide-react";
+import { Switch } from "@/components/ui/base/switch";
 import "./image-size-picker.css";
 import type { ImageCapabilityConfig } from "@/lib/model-capabilities";
 import { IMAGE_RATIOS, IMAGE_RESOLUTIONS, imagePresetForRatio, imageSizeConfigWithPresets, imageSizePresets, imageTierAvailable } from "@/lib/image-size-presets";
@@ -11,6 +12,10 @@ export function ImageSizePresetsEditor({ profile, disabled, onChange }: { profil
     const id = useId();
     const [drafts, setDrafts] = useState<Partial<Record<ImageResolutionTier, string>>>({});
     const [errors, setErrors] = useState<Partial<Record<ImageResolutionTier, string>>>({});
+    const toggleTier = (tier: ImageResolutionTier, ratios: string[], enabled: boolean) => {
+        if (disabled) return;
+        update(tier, enabled ? ratios : []);
+    };
     const update = (tier: ImageResolutionTier, ratios: string[]) => {
         if (disabled) return false;
         try {
@@ -50,8 +55,11 @@ export function ImageSizePresetsEditor({ profile, disabled, onChange }: { profil
                 return (
                     <section key={tier} className="image-size-preset-group" aria-labelledby={`${id}-${tier}-title`}>
                         <header className="image-size-preset-heading">
-                            <strong id={`${id}-${tier}-title`}>{tier.toUpperCase()}</strong>
-                            <span>{items.length ? `${items.length} 个比例` : "未启用"}</span>
+                            <div className="image-size-preset-heading-label">
+                                <strong id={`${id}-${tier}-title`}>{tier.toUpperCase()}</strong>
+                                <span>{items.length ? `${items.length} 个比例` : "未启用"}</span>
+                                <Switch size="sm" checked={items.length === ratios.length} disabled={disabled} aria-label={`启用 ${tier.toUpperCase()} 规格`} onChange={(enabled) => toggleTier(tier, ratios, enabled)} />
+                            </div>
                         </header>
                         <div className="image-size-preset-body">
                             {!imageTierAvailable(profile, tier) ? <p className="image-size-hint">需先配置此档位对应的质量值，用户端才会开放。</p> : null}

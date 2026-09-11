@@ -26,6 +26,7 @@ import {
 } from "@/stores/canvas/use-canvas-agent-store";
 import { canvasAgentPostconditionMessage, hashCanvasAgentSnapshot, previewCanvasAgentOps, summarizeCanvasAgentOps, verifyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { buildCanvasAgentContext, findCanvasAgentNodes, getCanvasAgentConnection, getCanvasAgentGenerationTasks, getCanvasAgentNode, getCanvasAgentResources, validateCanvasAgentOps } from "@/lib/canvas/canvas-agent-context";
+import { isCanvasReadTool } from "@/lib/canvas/canvas-agent-protocol";
 import { buildCanvasResourceReferences } from "@/lib/canvas/canvas-resource-references";
 import { buildLocalAgentSetupCommands, detectLocalAgentSetupPlatform, type LocalAgentSetupPlatform } from "@/lib/canvas/local-agent-setup";
 import { listAddedSkills, type Skill } from "@/services/api/skills";
@@ -351,6 +352,7 @@ export const CanvasLocalAgentPanel = memo(function CanvasLocalAgentPanel({
             const files = state.attachments;
             addMessage({ role: "user", text: payload.text || "发送了图片", attachments: files });
             addEventLog("用户发送", { text: payload.text, attachments: files.map(({ name, type, size }) => ({ name, type, size })) });
+            // 保留附件的 data URL 供已发送消息持续显示和放大预览；仅释放 composer 的临时 object URL。
             files.forEach((item) => {
                 URL.revokeObjectURL(item.url);
                 attachmentUrlsRef.current.delete(item.url);
@@ -1317,7 +1319,7 @@ function toolName(name: string) {
 }
 
 function isReadTool(name: string) {
-    return name === "canvas_get_state" || name === "canvas_get_context" || name === "canvas_find_nodes" || name === "canvas_get_node" || name === "canvas_get_connection" || name === "canvas_get_generation_tasks" || name === "canvas_get_resources" || name === "canvas_validate_ops" || name === "canvas_get_selection" || name === "canvas_export_snapshot" || isProjectAgentReadTool(name);
+    return isCanvasReadTool(name) || isProjectAgentReadTool(name);
 }
 
 function isMcpToolItem(item?: AgentEventItem) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ImageSizePicker } from "../src/components/image-size-picker";
+import { applyImageSizeSelection } from "../src/components/image-settings-panel";
 import { ImageSizePresetsEditor } from "../src/components/image-size-presets-editor";
 import { ModelCapabilityEditor } from "../src/components/model-capability-editor";
 import { defaultImageCapabilityConfig, normalizeModelCapabilityConfig } from "../src/lib/model-capabilities";
@@ -10,6 +11,12 @@ import { resolveImageRequestSize, validateImageSize } from "../src/services/api/
 import { buildGeminiImageGenerationConfig } from "../src/lib/gemini-image";
 
 describe("统一图片分辨率与宽高比", () => {
+    test("比例协议切换 4K 时同时提交尺寸和真实质量档位", () => {
+        const changes: Array<[string, string]> = [];
+        applyImageSizeSelection((key, value) => changes.push([key, value]), "16:9", "high");
+        expect(changes).toEqual([["size", "16:9"], ["quality", "high"]]);
+    });
+
     test("像素协议从旧比例配置切换 4K 后发送真实像素，不回退到 1K", () => {
         const profile = defaultImageCapabilityConfig();
         profile.size = { parameter: "size", values: ["16:9"], default: "16:9", allowCustom: true };
@@ -40,6 +47,17 @@ describe("统一图片分辨率与宽高比", () => {
         for (const ratio of ["0:9", "4:1", "1:4", "NaN:1", "1.5:1", "999999999:1"]) {
             expect(() => imagePresetForRatio("1k", ratio)).toThrow();
         }
+    });
+
+    test("固定比例编辑器包含 4:5 和 5:4 三档尺寸", () => {
+        expect(IMAGE_RATIOS).toContain("4:5");
+        expect(IMAGE_RATIOS).toContain("5:4");
+        expect(imagePresetForRatio("1k", "4:5").size).toBe("1024x1280");
+        expect(imagePresetForRatio("2k", "4:5").size).toBe("1792x2240");
+        expect(imagePresetForRatio("4k", "4:5").size).toBe("2560x3200");
+        expect(imagePresetForRatio("1k", "5:4").size).toBe("1280x1024");
+        expect(imagePresetForRatio("2k", "5:4").size).toBe("2240x1792");
+        expect(imagePresetForRatio("4k", "5:4").size).toBe("3200x2560");
     });
 
     test("管理员设置同步支持值、默认值，并保持精确尺寸", () => {
@@ -139,6 +157,11 @@ describe("统一图片分辨率与宽高比", () => {
             expect(editor).toContain(`aria-label="${tier} 16:9"`);
         }
         expect(editor).toContain('aria-label="默认输出"');
+        expect(editor).not.toContain("全不选");
+        expect(editor).not.toContain("全选");
+        expect(editor).toContain('aria-label="启用 1K 规格"');
+        expect(editor).toContain('aria-label="启用 2K 规格"');
+        expect(editor).toContain('aria-label="启用 4K 规格"');
         const readOnly = renderToStaticMarkup(<ImageSizePresetsEditor profile={profile} disabled onChange={() => {}} />);
         const buttons = [...readOnly.matchAll(/<button\b[^>]*>/g)];
         expect(buttons.length).toBeGreaterThan(24);

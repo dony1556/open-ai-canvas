@@ -11,13 +11,22 @@ const (
 	promptOperationStoryboardFirstFrame = "storyboard_first_frame"
 	promptOperationStoryboardVideo      = "storyboard_video"
 	promptOperationCharacterExtract     = "character_extract"
+	promptOperationChapterAssetsExtract = "chapter_assets_extract"
 	promptOperationCharacterTurnaround  = "character_turnaround"
+	promptOperationShortDramaOutline    = "short_drama_outline"
+	promptOperationSkillDraft           = "skill_draft"
 )
 
 const legacyStoryboardVideoPromptPreamble = "生成单一连续镜头的视频执行提示词。一个镜头只保留一个叙事目标、一个主运镜和一条主要动作链；摄影机运动必须有起点、动机和停止点。优先保证角色身份、表演、关键动作和连续性，次要环境效果可以简化。\n\n"
 
 func defaultPromptDefinitions() []PromptOperationDefinition {
 	return []PromptOperationDefinition{
+		{
+			Operation: promptOperationChapterAssetsExtract, Label: "章节角色、场景与道具提取", Category: "角色", OutputType: "json", SchemaKey: "chapter-assets/v1",
+			Description:    "从章节正文提取角色、实际发生剧情的场景和影响剧情的道具，分别进入资产待确认列表。",
+			Variables:      []PromptTemplateVariable{{Label: "项目名称", Placeholder: "{{项目名称}}"}, {Label: "章节名称", Placeholder: "{{章节名称}}"}, {Label: "项目画风", Placeholder: "{{项目画风}}"}},
+			DefaultContent: `你是短剧资产导演。按章节事实提取角色、场景和道具。同一身份的别名合并，不编造正文未出现的资产；未明确的视觉信息写“正文未明确”。角色包含剧情定位、稳定外貌服装体态、性格、一致性提示、三视图提示及语言、声音年龄、音色。场景描述空间布局、环境和光照；道具描述材质、形状及剧情用途。无对应资产时返回空数组。`,
+		},
 		{
 			Operation: promptOperationStoryboardPlan, Label: "分镜规划", Category: "分镜", OutputType: "json", SchemaKey: "storyboard-plan/v3",
 			Description:    "把剧情、项目画风和当前角色版本规划为可执行镜头。",
@@ -94,6 +103,18 @@ func defaultPromptDefinitions() []PromptOperationDefinition {
 			Variables:      []PromptTemplateVariable{{Label: "角色名称", Placeholder: "{{角色名称}}"}, {Label: "项目画风", Placeholder: "{{项目画风}}"}, {Label: "角色设定", Placeholder: "{{角色设定}}"}},
 			DefaultContent: `制作专业人物三视图设定表。画面严格分成三个等宽竖向区域，从左到右依次为正面全身、右侧面全身、背面全身。三个视角必须是同一角色、同一服装、同一发型、同一体型和同一比例，采用站立中性姿势，完整显示头顶到脚底。背景使用纯净中性浅色和均匀设定稿光线，只负责分离轮廓，不得改变项目画风的绘画或渲染媒介。禁止文字、边框、道具说明、表情变化和额外人物。`,
 		},
+		{
+			Operation: promptOperationShortDramaOutline, Label: "短剧大纲", Category: "项目", OutputType: "json", SchemaKey: "short-drama-outline/v1",
+			Description:    "根据一句话故事生成短剧标题、简介和章节正文，供项目创建导入。",
+			Variables:      []PromptTemplateVariable{{Label: "章节数量", Placeholder: "{{章节数量}}"}, {Label: "叙事结构", Placeholder: "{{叙事结构}}"}, {Label: "每章字数", Placeholder: "{{每章字数}}"}, {Label: "叙事视角", Placeholder: "{{叙事视角}}"}, {Label: "整体基调", Placeholder: "{{整体基调}}"}, {Label: "角色规模", Placeholder: "{{角色规模}}"}, {Label: "章节篇幅", Placeholder: "{{章节篇幅}}"}},
+			DefaultContent: `你是短剧编剧。根据用户的一句话故事，生成一部短剧的标题、一句话简介和 {{章节数量}} 个章节。生成要求：叙事采用{{叙事结构}}结构，每章约 {{每章字数}} 字，使用{{叙事视角}}视角，整体基调{{整体基调}}，主要角色约 {{角色规模}}，章节篇幅{{章节篇幅}}。`,
+		},
+		{
+			Operation: promptOperationSkillDraft, Label: "技能草稿", Category: "技能", OutputType: "json", SchemaKey: "skill-draft/v1",
+			Description:    "根据用户想法生成可复用创作技能的名称、分类、简介和指令草稿。",
+			Variables:      []PromptTemplateVariable{},
+			DefaultContent: `你是一位技能编写助手。根据用户的想法，为一个「可复用的创作技能」生成一份草稿。技能名称简短，不超过 20 个字。分类 tag 必须是 drama、ecommerce、creative、social、others 之一。简介不超过 120 字，说明适用场景、输入条件和最终产出。指令使用 Markdown，至少 300 字，写给后续在画布中使用该技能的模型阅读，必须包含角色设定、输入与约束、分步执行流程、检查清单和输出格式。`,
+		},
 	}
 }
 
@@ -105,8 +126,25 @@ func protectedPromptContext(operation string, values map[string]string) string {
 		return storyboardRepairProtectedContext(values)
 	case promptOperationCharacterExtract:
 		return characterExtractProtectedContext(values)
+	case promptOperationChapterAssetsExtract:
+		return strings.Join([]string{
+			fmt.Sprintf("【任务】\n从短剧项目《%s》的章节“%s”提取角色、场景和道具。", values["项目名称"], values["章节名称"]),
+			"【项目画风】\n" + values["项目画风"],
+			"【章节正文】\n" + values["章节正文"],
+			"【受保护输出契约】\n" + promptOutputContract(operation),
+		}, "\n\n")
 	case promptOperationCharacterTurnaround:
 		return strings.Join([]string{"【角色名称】\n" + values["角色名称"], "【项目画风】\n" + values["项目画风"], "【角色设定】\n" + values["角色设定"]}, "\n\n")
+	case promptOperationShortDramaOutline:
+		return strings.Join([]string{
+			"【用户故事】\n" + values["用户故事"],
+			"【受保护输出契约】\n" + promptOutputContract(operation),
+		}, "\n\n")
+	case promptOperationSkillDraft:
+		return strings.Join([]string{
+			"【用户想法】\n" + values["用户想法"],
+			"【受保护输出契约】\n" + promptOutputContract(operation),
+		}, "\n\n")
 	default:
 		return ""
 	}
@@ -118,10 +156,51 @@ func promptOutputContract(operation string) string {
 		return "服务端固定 JSON Schema storyboard-plan/v3（不可由运营模板或用户定制覆盖）：\n" + storyboardPlanJSONSchema
 	case promptOperationCharacterExtract:
 		return "服务端固定 JSON Schema character-breakdown/v1（不可由运营模板或用户定制覆盖）：\n" + characterBreakdownJSONSchema
+	case promptOperationChapterAssetsExtract:
+		return "服务端固定 JSON Schema chapter-assets/v1（不可由运营模板或用户定制覆盖）：\n" + chapterAssetsJSONSchema
+	case promptOperationShortDramaOutline:
+		return "服务端固定 JSON Schema short-drama-outline/v1（不可由运营模板或用户定制覆盖）：\n" + shortDramaOutlineJSONSchema + "\n只输出一个 JSON 对象，不要输出 markdown 代码块或其他文字。"
+	case promptOperationSkillDraft:
+		return "服务端固定 JSON Schema skill-draft/v1（不可由运营模板或用户定制覆盖）：\n" + skillDraftJSONSchema + "\n只输出一个 JSON 对象，不要输出 markdown 代码块或其他文字。"
 	default:
 		return "当前操作输出普通文本提示词，没有 JSON Schema。"
 	}
 }
+
+const shortDramaOutlineJSONSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "synopsis", "chapters"],
+  "properties": {
+    "title": {"type": "string"},
+    "synopsis": {"type": "string"},
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "content"],
+        "properties": {
+          "title": {"type": "string"},
+          "content": {"type": "string"}
+        }
+      }
+    }
+  }
+}`
+
+const skillDraftJSONSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["skillName", "tag", "description", "instruction"],
+  "properties": {
+    "skillName": {"type": "string"},
+    "tag": {"type": "string", "enum": ["drama", "ecommerce", "creative", "social", "others"]},
+    "description": {"type": "string"},
+    "instruction": {"type": "string"}
+  }
+}`
 
 const storyboardPlanJSONSchema = `{
   "type": "object",
@@ -179,6 +258,24 @@ const storyboardPlanJSONSchema = `{
         }
       }
     }
+  }
+}`
+
+const chapterAssetsJSONSchema = `{
+  "type": "object", "additionalProperties": false,
+  "required": ["characters", "scenes", "props"],
+  "properties": {
+    "characters": {"$ref": "#/$defs/characterBreakdown/properties/characters"},
+    "scenes": {"type": "array", "items": {"$ref": "#/$defs/asset"}},
+    "props": {"type": "array", "items": {"$ref": "#/$defs/asset"}}
+  },
+  "$defs": {
+    "asset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "description", "prompt"],
+      "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "prompt": {"type": "string"}}
+    },
+    "characterBreakdown": ` + characterBreakdownJSONSchema + `
   }
 }`
 

@@ -1,7 +1,7 @@
-import { Button, Image as AntImage, InputNumber, Modal } from "antd";
+import { Button, Image as AntImage, InputNumber, Modal, Popover } from "antd";
 import { Tooltip } from "@/components/ui/base/tooltip";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { ArrowUp, AtSign, Boxes, ChevronDown, FileText, ImageIcon, ImagePlus, LoaderCircle, Maximize2, Music2, Pencil, SlidersHorizontal, UserRound, Video, WandSparkles, X } from "lucide-react";
+import { ArrowUp, AtSign, Boxes, Camera, ChevronDown, FileText, GripVertical, ImageIcon, ImagePlus, Link2, LoaderCircle, Maximize2, Music2, Pencil, SlidersHorizontal, UserRound, Video, WandSparkles, X } from "lucide-react";
 
 import { ModelPicker } from "@/components/model-picker";
 import { defaultConfig, modelOptionName, resolveModelChannel, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -14,7 +14,10 @@ import { modelRequestOptions, resolveCompatibleModel, resolveModelGenerationDefa
 import { navigateToSettings } from "@/lib/settings-navigation";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { AppModal } from "@/components/ui/product/app-modal/app-modal";
+import type { CameraControlOptions } from "@/lib/canvas/camera-prompt-library";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { CanvasNodeCameraPanel } from "./canvas-node-camera-dialog";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
@@ -23,7 +26,7 @@ import { CanvasPresetPicker, type CanvasPromptPreset } from "./canvas-preset-pic
 import { CanvasPortraitTexturePopover } from "./canvas-portrait-texture-popover";
 import { CanvasPromptOptimizerDrawer } from "./canvas-prompt-optimizer-drawer";
 import { CanvasNodeType, type CanvasGenerationMode, type CanvasNodeData, type CanvasNodeMetadata, type CanvasWorkspaceMode } from "@/types/canvas";
-import { canvasResourceMentionToken, normalizeCanvasNodeMentionTokens, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { autoMentionCanvasResourceReferences, canvasResourceMentionToken, normalizeCanvasNodeMentionTokens, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { promptOptimizerPlugin, PROMPT_OPTIMIZER_PLUGIN_ID } from "@/lib/plugins/builtin/prompt-optimizer";
 import { createPluginHostContext } from "@/services/plugin-host";
 import { usePluginStore } from "@/stores/use-plugin-store";
@@ -33,6 +36,7 @@ import { quoteLogicalModel } from "@/services/api/logical-models";
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
 type CanvasNodePromptPanelProps = {
+    projectId: string;
     node: CanvasNodeData;
     isRunning: boolean;
     onPromptChange: (nodeId: string, prompt: string) => void;
@@ -40,6 +44,7 @@ type CanvasNodePromptPanelProps = {
     onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
     mentionReferences?: CanvasResourceReference[];
     onRemoveReference?: (nodeId: string, reference: CanvasResourceReference) => void;
+    onReorderReferences?: (nodeId: string, orderedNodeIds: string[]) => void;
     onClose?: () => void;
     onNodeMouseDown?: (event: ReactPointerEvent, nodeId: string) => void;
     onImageSettingsOpenChange?: (open: boolean) => void;
@@ -48,7 +53,7 @@ type CanvasNodePromptPanelProps = {
 
 type CanvasTheme = (typeof canvasThemes)[keyof typeof canvasThemes];
 
-const PROMPT_REFERENCE_SHELF_HEIGHT = 36;
+const PROMPT_REFERENCE_SHELF_HEIGHT = 58;
 const PROMPT_EDITOR_MIN_HEIGHT = 44;
 const PROMPT_EDITOR_EXPANDED_MIN_HEIGHT = 76;
 const PROMPT_EDITOR_LINE_HEIGHT = 20;
@@ -57,7 +62,7 @@ const PROMPT_EDITOR_VERTICAL_PADDING = 12;
 const PROMPT_EDITOR_EXPANDED_VERTICAL_PADDING = 20;
 const PROMPT_EDITOR_MAX_LINES = 8;
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onRemoveReference, onClose, onNodeMouseDown, onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onRemoveReference, onReorderReferences, onClose, onNodeMouseDown, onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const themeName = useThemeStore((state) => state.theme);
     const theme = canvasThemes[themeName];
@@ -79,7 +84,8 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const [manualExpandedPromptHeight, setManualExpandedPromptHeight] = useState<number | null>(null);
     const [paramsExpanded, setParamsExpanded] = useState(false); // #98 决策2：B区参数区折叠状态（手风琴）
     const [promptOptimizerOpen, setPromptOptimizerOpen] = useState(false);
-    const resolvedMentionReferences = useResolvedCanvasResourceReferences(mentionReferences);
+    const [autoLinkEnabled, setAutoLinkEnabled] = useState(true);
+    const resolvedMentionReferences = useResolvedCanvasResourceReferences(mentionReferences, { projectId });
     const normalizedSavedPrompt = useMemo(() => normalizeCanvasNodeMentionTokens(savedPrompt, mentionReferences), [mentionReferences, savedPrompt]);
     const activeReferences = resolvedMentionReferences.filter((item) => item.active && item.kind !== "skill");
     const requirements: ModelRequirements = {
@@ -159,6 +165,8 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const canExpandPrompt = mode === "image" || mode === "video";
     const canOptimizePrompt = Boolean(promptOptimizerProvider) && canExpandPrompt;
     const isPortraitTexture = mode === "image" && Boolean(node.metadata?.portraitTexture);
+    const autoMentionedPrompt = useMemo(() => autoMentionCanvasResourceReferences(prompt, resolvedMentionReferences), [prompt, resolvedMentionReferences]);
+    const canAutoMention = autoMentionedPrompt !== prompt;
 
     useEffect(() => {
         setPrompt(normalizedSavedPrompt);
@@ -244,13 +252,17 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             }}
         >
             {isPortraitTexture ? (
-                <CanvasPortraitTexturePopover value={node.metadata?.portraitTexture} placement={expanded ? "topRight" : "topLeft"} onChange={(portraitTexture) => onConfigChange(node.id, { portraitTexture })} />
+                <>
+                    <CanvasPortraitTexturePopover value={node.metadata?.portraitTexture} placement={expanded ? "topRight" : "topLeft"} onChange={(portraitTexture) => onConfigChange(node.id, { portraitTexture })} />
+                    {activeReferenceCount > 0 ? <span className="canvas-node-composer-reference-heading">{referenceShelfHeading(activeReferences)}</span> : null}
+                </>
             ) : (
                 <div className="canvas-node-composer-mode">
                     <span className="grid size-3.5 shrink-0 place-items-center" style={{ color: monochromeAccent }}>
                         <GenerationModeIcon mode={mode} />
                     </span>
                     <span className="truncate text-[var(--fs-tiny)] font-medium">{modeDisplayName(mode)}生成</span>
+                    {activeReferenceCount > 0 ? <span className="canvas-node-composer-reference-heading">{referenceShelfHeading(activeReferences)}</span> : null}
                 </div>
             )}
             <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
@@ -335,6 +347,14 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 <span className="min-w-0 truncate px-2 text-[var(--fs-tiny)]" style={{ color: theme.node.muted }}>
                     {activeReferenceCount ? `已连接 ${activeReferenceCount} 个素材` : "将使用默认模型与参数"}
                 </span>
+                <ReferenceToolsPopover
+                    canAutoMention={canAutoMention}
+                    autoLinkEnabled={autoLinkEnabled}
+                    onAutoMention={() => updatePrompt(autoMentionedPrompt)}
+                    onAutoLinkEnabledChange={setAutoLinkEnabled}
+                    accent={monochromeAccent}
+                    compact
+                />
                 {renderSubmitButton(expanded)}
             </div>
         ) : (
@@ -356,6 +376,14 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     />
                 </div>
                 <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
+                    <ReferenceToolsPopover
+                        canAutoMention={canAutoMention}
+                        autoLinkEnabled={autoLinkEnabled}
+                        onAutoMention={() => updatePrompt(autoMentionedPrompt)}
+                        onAutoLinkEnabledChange={setAutoLinkEnabled}
+                        accent={monochromeAccent}
+                        compact={!expanded}
+                    />
                     {mode === "text" ? (
                         <Tooltip title={`文本生成份数（默认 1，可在生成配置中调整）`}>
                             <InputNumber
@@ -369,14 +397,23 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                             />
                         </Tooltip>
                     ) : mode === "image" ? (
-                        <CanvasImageSettingsPopover
-                            config={config}
-                            placement={expanded ? "topRight" : "topLeft"}
-                            buttonClassName="canvas-node-composer-settings-trigger [&>span]:min-w-0 [&_.lucide]:!size-3"
-                            onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
-                            onMissingConfig={() => navigateToSettings({ continueCreation: true })}
-                            onOpenChange={expanded ? undefined : onImageSettingsOpenChange}
-                        />
+                        // 图片模式下，显示相机配置与镜头配置
+                        <>
+                            <CameraToolsPopover
+                                cameraControl={node.metadata?.cameraControl}
+                                onCameraControlChange={(options) => onConfigChange(node.id, { cameraControl: options })}
+                                theme={theme}
+                                compact={!expanded}
+                            />
+                            <CanvasImageSettingsPopover
+                                config={config}
+                                placement={expanded ? "topRight" : "topLeft"}
+                                buttonClassName="canvas-node-composer-settings-trigger [&>span]:min-w-0 [&_.lucide]:!size-3"
+                                onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
+                                onMissingConfig={() => navigateToSettings({ continueCreation: true })}
+                                onOpenChange={expanded ? undefined : onImageSettingsOpenChange}
+                            />
+                        </>
                     ) : mode === "video" ? (
                         <CanvasVideoSettingsPopover
                             config={config}
@@ -401,12 +438,19 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         return (
             <>
                 <div className="canvas-node-composer-editor" style={{ height }}>
-                    <ConnectedReferenceShelf references={resolvedMentionReferences} theme={theme} onInsert={insertPromptReference} onRemove={(reference) => onRemoveReference?.(node.id, reference)} />
+                    <ConnectedReferenceShelf
+                        references={resolvedMentionReferences}
+                        theme={theme}
+                        onInsert={insertPromptReference}
+                        onRemove={(reference) => onRemoveReference?.(node.id, reference)}
+                        onReorder={onReorderReferences ? (orderedNodeIds) => onReorderReferences(node.id, orderedNodeIds) : undefined}
+                    />
                     <CanvasResourceMentionTextarea
                         value={prompt}
                         references={resolvedMentionReferences}
                         includeAssetLibrary
                         onChange={updatePrompt}
+                        autoLinkEnabled={autoLinkEnabled}
                         onContentSizeChange={expanded ? setExpandedPromptContentHeight : setPromptContentHeight}
                         containerClassName="min-h-0 flex-1"
                         className={expanded
@@ -511,6 +555,95 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     );
 }
 
+function CameraToolsPopover({ cameraControl, onCameraControlChange, theme, compact }: { cameraControl?: CameraControlOptions; onCameraControlChange: (options: CameraControlOptions) => void; theme: CanvasTheme; compact: boolean }) {
+    const [open, setOpen] = useState(false);
+    const cameraEnabled = cameraControl?.enabled === true;
+    return (
+        <>
+            <button
+                type="button"
+                className={`canvas-node-composer-camera-tools-trigger inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 text-[var(--fs-tiny)] transition-colors ${compact ? "is-compact h-7" : "h-8"}`}
+                style={{
+                    background: cameraEnabled ? `${theme.node.activeStroke}66` : theme.node.fill,
+                    color: cameraEnabled ? theme.node.panel : theme.node.text,
+                }}
+                aria-pressed={cameraEnabled}
+                aria-label="摄像机控制"
+                title={`摄像机控制${cameraEnabled ? " · 已启用" : ""}`}
+                onClick={() => setOpen(true)}
+            >
+                <Camera className="size-4.5" />
+                {!compact ? <span>摄像机</span> : null}
+            </button>
+            {open ? (
+                <AppModal title="摄像机控制" open centered footer={null} width={780} flush onCancel={() => setOpen(false)}>
+                    <CanvasNodeCameraPanel
+                        cameraControl={cameraControl}
+                        onClose={() => setOpen(false)}
+                        onConfirm={(options) => {
+                            onCameraControlChange(options);
+                            setOpen(false);
+                        }}
+                    />
+                </AppModal>
+            ) : null}
+        </>
+    );
+}
+
+function ReferenceToolsPopover({ canAutoMention, autoLinkEnabled, onAutoMention, onAutoLinkEnabledChange, accent, compact }: { canAutoMention: boolean; autoLinkEnabled: boolean; onAutoMention: () => void; onAutoLinkEnabledChange: (enabled: boolean) => void; accent: string; compact: boolean }) {
+    return (
+        <Popover
+            trigger="click"
+            placement="topRight"
+            rootClassName="canvas-reference-tools-popover"
+            arrow={false}
+            align={{ offset: [0, -8] }}
+            styles={{ root: { width: "min(280px, calc(100vw - 24px))" }, container: { width: "100%" }, content: { width: "100%", padding: 12 } }}
+            content={
+                <div className="space-y-3">
+                    <div>
+                        <div className="text-sm font-medium">智能引用</div>
+                        <div className="mt-1 text-xs text-black/50 dark:text-white/50">输入素材序号或名称后按 Tab，可快速引用</div>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 text-sm"><Link2 className="size-3.5" />AutoLink</div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={autoLinkEnabled}
+                            aria-label={autoLinkEnabled ? "关闭 AutoLink" : "开启 AutoLink"}
+                            className={`relative h-5 w-9 rounded-full transition-colors ${autoLinkEnabled ? "" : "bg-black/20 dark:bg-white/20"}`}
+                            style={autoLinkEnabled ? { background: accent } : undefined}
+                            onClick={() => onAutoLinkEnabledChange(!autoLinkEnabled)}
+                        >
+                            <span className={`absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform ${autoLinkEnabled ? "translate-x-4" : "translate-x-0"}`} />
+                        </button>
+                    </div>
+                    <button
+                        type="button"
+                        className="flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--canvas-composer-control-surface)] px-2 py-1.5 text-sm transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45"
+                        disabled={!canAutoMention}
+                        onClick={onAutoMention}
+                    >
+                        <AtSign className="size-3.5" />一键引用全文
+                    </button>
+                </div>
+            }
+        >
+            <button
+                type="button"
+                className={`canvas-node-composer-settings-trigger canvas-node-composer-reference-tools-trigger inline-flex shrink-0 items-center gap-1 ${compact ? "is-compact" : ""}`}
+                aria-label="打开智能引用"
+                title="智能引用"
+            >
+                <SlidersHorizontal className="size-4.5" />
+                {!compact ? <span>引用</span> : null}
+            </button>
+        </Popover>
+    );
+}
+
 function GenerationModeIcon({ mode }: { mode: CanvasNodeGenerationMode }) {
     if (mode === "image") return <ImagePlus className="size-3" />;
     if (mode === "video") return <Video className="size-3" />;
@@ -525,54 +658,121 @@ function modeDisplayName(mode: CanvasNodeGenerationMode) {
     return "文本";
 }
 
-function ConnectedReferenceShelf({ references, theme, onInsert, onRemove }: { references: CanvasResourceReference[]; theme: CanvasTheme; onInsert: (reference: CanvasResourceReference) => void; onRemove?: (reference: CanvasResourceReference) => void }) {
+function referenceShelfHeading(references: CanvasResourceReference[]) {
+    const label = references.every((reference) => reference.kind === "image" || reference.kind === "character") ? "参考图" : "参考素材";
+    return `${label} · ${references.length}`;
+}
+
+function ConnectedReferenceShelf({ references, theme, onInsert, onRemove, onReorder }: { references: CanvasResourceReference[]; theme: CanvasTheme; onInsert: (reference: CanvasResourceReference) => void; onRemove?: (reference: CanvasResourceReference) => void; onReorder?: (orderedNodeIds: string[]) => void }) {
     const activeReferences = references.filter((item) => item.active && item.kind !== "skill");
     const [imagePreview, setImagePreview] = useState<CanvasResourceReference | null>(null);
+    const [draggedReferenceId, setDraggedReferenceId] = useState<string | null>(null);
     if (!activeReferences.length) return null;
+
+    const moveReference = (sourceId: string, targetId: string) => {
+        if (!onReorder || sourceId === targetId) return;
+        const sourceIndex = activeReferences.findIndex((reference) => reference.nodeId === sourceId);
+        const targetIndex = activeReferences.findIndex((reference) => reference.nodeId === targetId);
+        if (sourceIndex < 0 || targetIndex < 0) return;
+        const ordered = [...activeReferences];
+        const [moved] = ordered.splice(sourceIndex, 1);
+        ordered.splice(targetIndex, 0, moved);
+        onReorder(ordered.map((reference) => reference.nodeId));
+    };
+
+    const moveReferenceByOffset = (sourceId: string, offset: -1 | 1) => {
+        const sourceIndex = activeReferences.findIndex((reference) => reference.nodeId === sourceId);
+        const target = activeReferences[sourceIndex + offset];
+        if (!target) return;
+        moveReference(sourceId, target.nodeId);
+    };
 
     return (
         <>
-            <div className="canvas-node-composer-references thin-scrollbar" role="group" aria-label="已连接素材">
-                <span className="canvas-node-composer-reference-heading">
-                    {activeReferences.every((reference) => reference.kind === "image" || reference.kind === "character") ? "参考图" : "参考素材"} · {activeReferences.length}
-                </span>
-                {activeReferences.map((reference) => {
-                    const canPreview = (reference.kind === "image" || reference.kind === "character") && Boolean(reference.previewUrl);
-                    return (
-                        <span key={reference.id} className="canvas-node-reference-chip">
-                            <button
-                                type="button"
-                                className="canvas-node-reference-preview"
-                                style={{ background: theme.toolbar.itemHover, color: theme.node.text, outlineColor: theme.node.activeStroke }}
-                                title={canPreview ? `预览 ${reference.title}` : `插入 @${reference.label}`}
-                                aria-label={canPreview ? `预览 ${reference.title}` : `插入 @${reference.label}`}
-                                onClick={() => (canPreview ? setImagePreview(reference) : onInsert(reference))}
+            <div className="canvas-node-composer-references" role="group" aria-label="已连接素材">
+                <div className="canvas-node-composer-references-track thin-scrollbar">
+                    {activeReferences.map((reference, index) => {
+                        const canPreview = Boolean(reference.previewUrl) && (reference.kind === "image" || reference.kind === "character" || reference.kind === "video");
+                        return (
+                            <span
+                                key={reference.id}
+                                className="canvas-node-reference-chip"
+                                data-dragging={draggedReferenceId === reference.nodeId || undefined}
+                                onDragOver={(event) => {
+                                    if (!onReorder || !draggedReferenceId) return;
+                                    event.preventDefault();
+                                    event.dataTransfer.dropEffect = "move";
+                                }}
+                                onDrop={(event) => {
+                                    event.preventDefault();
+                                    const sourceId = draggedReferenceId || event.dataTransfer.getData("text/plain");
+                                    setDraggedReferenceId(null);
+                                    moveReference(sourceId, reference.nodeId);
+                                }}
                             >
-                                <ReferenceThumbnail reference={reference} />
-                            </button>
-                            <button type="button" className="canvas-node-reference-label" title={`插入 @${reference.label}`} onClick={() => onInsert(reference)}>
-                                <AtSign className="size-2.5" />
-                                <span>{reference.label}</span>
-                            </button>
-                            {onRemove ? (
+                                {onReorder ? (
+                                    <button
+                                        type="button"
+                                        className="canvas-node-reference-drag-handle"
+                                        draggable
+                                        title={`拖动调整 ${reference.label} 的顺序`}
+                                        aria-label={`调整 ${reference.label} 的顺序；使用左右方向键也可移动`}
+                                        onDragStart={(event) => {
+                                            setDraggedReferenceId(reference.nodeId);
+                                            event.dataTransfer.effectAllowed = "move";
+                                            event.dataTransfer.setData("text/plain", reference.nodeId);
+                                        }}
+                                        onDragEnd={() => setDraggedReferenceId(null)}
+                                        onKeyDown={(event) => {
+                                            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                                            event.preventDefault();
+                                            moveReferenceByOffset(reference.nodeId, event.key === "ArrowLeft" ? -1 : 1);
+                                        }}
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                    >
+                                        <GripVertical className="size-3" />
+                                    </button>
+                                ) : null}
+                                <span className="canvas-node-reference-order" aria-hidden>{index + 1}</span>
                                 <button
                                     type="button"
-                                    className="canvas-node-reference-remove"
-                                    style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
-                                    title="移除参考并删除连接"
-                                    aria-label={`移除参考 ${reference.label}`}
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        onRemove(reference);
-                                    }}
-                                    onPointerDown={(event) => event.stopPropagation()}
+                                    className="canvas-node-reference-preview"
+                                    style={{ background: theme.toolbar.itemHover, color: theme.node.text, outlineColor: theme.node.activeStroke }}
+                                    title={canPreview ? `预览 ${reference.title}` : `插入 @${reference.label}`}
+                                    aria-label={canPreview ? `预览 ${reference.title}` : `插入 @${reference.label}`}
+                                    onClick={() => (canPreview ? setImagePreview(reference) : onInsert(reference))}
                                 >
-                                    <X className="size-3" />
+                                    <ReferenceThumbnail reference={reference} />
+                                    {canPreview ? (
+                                        <span className="canvas-node-reference-preview-hint" aria-hidden="true">
+                                            <Maximize2 className="size-3" />
+                                        </span>
+                                    ) : null}
                                 </button>
-                            ) : null}
-                        </span>
-                    );
-                })}
+                                <button type="button" className="canvas-node-reference-label" title={`插入 @${reference.label}`} onClick={() => onInsert(reference)}>
+                                    <span className="opacity-55">@</span>
+                                    <span className="truncate">{reference.label}</span>
+                                </button>
+                                {onRemove ? (
+                                    <button
+                                        type="button"
+                                        className="canvas-node-reference-remove"
+                                        style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+                                        title="移除参考并删除连接"
+                                        aria-label={`移除参考 ${reference.label}`}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            onRemove(reference);
+                                        }}
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                    >
+                                        <X className="size-3" />
+                                    </button>
+                                ) : null}
+                            </span>
+                        );
+                    })}
+                </div>
             </div>
             {imagePreview?.previewUrl ? (
                 <AntImage

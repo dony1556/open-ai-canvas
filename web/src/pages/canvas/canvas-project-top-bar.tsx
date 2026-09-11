@@ -2,7 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router";
 import { Bot, Check, ChevronDown, Clapperboard, CloudDownload, Coins, CopyPlus, Focus, FolderKanban, Gauge, Home, LayoutGrid, LoaderCircle, Menu, Pencil, Plus, Redo2, Search, Settings2, Share2, Sparkles, Trash2, Undo2, Upload } from "lucide-react";
-import { Button, Dropdown } from "antd";
+import { Button, Dropdown, Tooltip } from "antd";
 
 import { useWalletBalance } from "@/hooks/use-wallet-balance";
 import { aceternityMotion } from "@/lib/aceternity-motion";
@@ -34,6 +34,7 @@ type CanvasTopBarProps = {
     onRedo: () => void;
     onShare: () => void;
     agentOpen: boolean;
+    agentPanelWidth?: number;
     compactAgentStatus?: { connected: boolean; enabled: boolean; activity: string };
     onToggleAgent: () => void;
     shortcutRequestNonce: number;
@@ -64,6 +65,7 @@ export function CanvasTopBar({
     onRedo,
     onShare,
     agentOpen,
+    agentPanelWidth,
     compactAgentStatus,
     onToggleAgent,
     shortcutRequestNonce,
@@ -101,7 +103,7 @@ export function CanvasTopBar({
 
     return (
         <>
-            <div className="canvas-topbar pointer-events-none absolute left-0 right-0 top-0 z-[var(--z-toolbar)] flex h-[var(--canvas-topbar-h)] items-center justify-between px-4 sm:px-5">
+            <div className="canvas-topbar pointer-events-none absolute left-0 top-0 z-[var(--z-toolbar)] flex h-[var(--canvas-topbar-h)] items-center justify-between px-4 sm:px-5" style={{ right: agentOpen && agentPanelWidth ? `calc(${agentPanelWidth}px + var(--space-3))` : 0, transition: "right var(--motion-dur-base-calc) var(--motion-ease-out)" }}>
                 <div className="canvas-topbar-cluster canvas-topbar-project-cluster pointer-events-auto flex min-w-0 items-center gap-2" style={dockStyle}>
                     <CanvasTopBarTooltip label="打开画布菜单">
                         <Dropdown
@@ -187,7 +189,7 @@ export function CanvasTopBar({
                     <CanvasTopBarTooltip label="搜索画布节点">
                         <Button type="text" className="canvas-topbar-action !hidden !h-10 !w-10 !min-w-10 !rounded-xl !p-0 lg:!inline-flex" style={{ color: theme.node.text }} icon={<Search className="size-4" />} onClick={onOpenSearch} aria-label="搜索画布节点" />
                     </CanvasTopBarTooltip>
-                    <CanvasTopBarTooltip label="导入第三方画布">
+                    {!agentOpen ? <CanvasTopBarTooltip label="导入第三方画布">
                         <Dropdown
                             trigger={["click"]}
                             placement="bottomRight"
@@ -202,8 +204,8 @@ export function CanvasTopBar({
                                 <span className="hidden lg:inline">导入第三方画布</span>
                             </Button>
                         </Dropdown>
-                    </CanvasTopBarTooltip>
-                    <CanvasTopBarTooltip label="媒体性能模式">
+                    </CanvasTopBarTooltip> : null}
+                    {!agentOpen ? <CanvasTopBarTooltip label="媒体性能模式">
                         <Dropdown
                             trigger={["click"]}
                             menu={{
@@ -219,7 +221,7 @@ export function CanvasTopBar({
                         >
                             <Button type="text" className="canvas-topbar-action !hidden !h-10 !w-10 !min-w-10 !rounded-xl !p-0 lg:!inline-flex" style={{ color: theme.node.text }} icon={<Gauge className="size-4" />} aria-label="媒体性能模式" />
                         </Dropdown>
-                    </CanvasTopBarTooltip>
+                    </CanvasTopBarTooltip> : null}
                     {compactAgentStatus ? <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /> : null}
                     {user && creditsEnabled ? (
                         <CanvasTopBarTooltip label="查看积分明细">
@@ -229,7 +231,7 @@ export function CanvasTopBar({
                                 style={{ color: theme.node.text }}
                                 aria-label="查看积分明细"
                             >
-                                {refreshing && availableMicrocredits === null ? <LoaderCircle className="size-3.5 animate-spin opacity-60" /> : <Coins className="size-3.5" />}
+                                {refreshing && availableMicrocredits === null ? <LoaderCircle className="size-3.5 animate-spin opacity-60" style={{ color: theme.accent.primary }} /> : <Coins className="size-3.5" style={{ color: theme.accent.primary }} />}
                                 <span>{availableMicrocredits === null ? "--" : (availableMicrocredits / 1_000_000).toLocaleString("zh-CN", { maximumFractionDigits: 3 })}</span>
                             </Link>
                         </CanvasTopBarTooltip>
@@ -356,14 +358,14 @@ export function CanvasWorkspaceModeSwitch({ mode, onChange }: { mode: CanvasWork
 
 type CanvasTheme = (typeof canvasThemes)[keyof typeof canvasThemes];
 
+// 顶栏是 --z-toolbar 上的绝对定位浮层，会为子元素建立层叠上下文。行内绝对定位的提示
+// 无论 z-index 多高都无法越过它，会被顶栏下方 --z-panel-floating 的生成任务面板盖住，
+// 因此提示必须走 portal 的浮层层级。
 function CanvasTopBarTooltip({ label, children }: { label: string; children: ReactNode }) {
     return (
-        <span className="group relative inline-flex">
-            {children}
-            <span role="tooltip" className="aceternity-dock-tooltip pointer-events-none absolute left-1/2 top-[calc(100%+8px)] z-[var(--dock-tooltip-z)] -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-md border px-2 py-1 text-[var(--fs-tiny)] font-medium opacity-0 shadow-xl backdrop-blur-xl transition-all duration-150 motion-reduce:transition-none group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
-                {label}
-            </span>
-        </span>
+        <Tooltip title={label} placement="bottom">
+            <span className="relative inline-flex">{children}</span>
+        </Tooltip>
     );
 }
 

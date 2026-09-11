@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App, Button, Drawer, Dropdown, Form, Input, Modal, Popconfirm, Progress, Select, Space, Tag, Typography } from "antd";
 import type { MenuProps } from "antd";
-import { IconButton } from "@/components/ui/base/buttons";
 import { useNavigate } from "react-router";
 
 import { CollectionGrid, ListToolbar, PageHeader, PaginationBar, WorkspacePage } from "@/components/layout/workspace-page";
@@ -12,7 +11,6 @@ import { AssetMediaPreview } from "@/components/asset-media-preview";
 import { AssetLibraryCard, AssetLibraryCardMedia } from "@/components/assets/asset-library-card";
 import { saveAs } from "file-saver";
 import { cn } from "@/lib/utils";
-import { normalizeAssetRecord } from "@/lib/asset-storage-revision";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -24,7 +22,7 @@ import { uploadMediaFile } from "@/services/file-storage";
 import { flushAssetStorePersistence, useAssetStore, type Asset, type AssetCategory, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 import { AssetStorageUsage, assetStorageUsageQueryKey } from "./asset-storage-usage";
-import { deleteAssetWithRemoteSync, loadAssetLibraryPage, saveRemoteUserDataNow } from "@/services/user-data-sync";
+import { deleteAssetWithRemoteSync, loadAssetLibraryPage, localSavedRemotePendingMessage, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { useUserStore } from "@/stores/use-user-store";
 import { createAssetFolder, deleteAssetFolder, listAssetFolders, listRemoteAssetsPage, moveRemoteAssetsToFolder, updateAssetFolder, type AssetFolder } from "@/services/api/user-data";
 import { AssetBatchUploadModal } from "./asset-batch-upload-modal";
@@ -125,7 +123,7 @@ export default function AssetsPage() {
     });
     const folders = foldersQuery.data?.folders || [];
 
-    const allLibraryAssets = useMemo(() => assets.map(normalizeAssetRecord).filter((asset): asset is LibraryAsset => asset.kind !== "entity"), [assets]);
+    const allLibraryAssets = useMemo(() => assets.filter((asset): asset is LibraryAsset => asset.kind !== "entity"), [assets]);
     const activeAssets = useMemo(() => allLibraryAssets.filter((asset) => asset.status !== "archived"), [allLibraryAssets]);
     const trashAssets = useMemo(() => allLibraryAssets.filter((asset) => asset.status === "archived"), [allLibraryAssets]);
     const validAssets = viewMode === "trash" ? trashAssets : activeAssets;
@@ -164,7 +162,7 @@ export default function AssetsPage() {
         return filteredAssets.slice(start, start + pageSize);
     }, [filteredAssets, page, pageSize]);
     const visibleAssets = useMemo(
-        () => (assetPageQuery.data?.assets || localVisibleAssets).map(normalizeAssetRecord).filter((asset): asset is LibraryAsset => asset.kind !== "entity"),
+        () => (assetPageQuery.data?.assets || localVisibleAssets).filter((asset): asset is LibraryAsset => asset.kind !== "entity"),
         [assetPageQuery.data?.assets, localVisibleAssets],
     );
     const visibleAssetIds = useMemo(() => visibleAssets.map((asset) => asset.id), [visibleAssets]);
@@ -333,8 +331,8 @@ export default function AssetsPage() {
             await saveRemoteUserDataNow();
             await invalidateAssetLibrary();
             message.success(editingAsset ? "素材已更新" : "素材已保存");
-        } catch {
-            message.warning(editingAsset ? "素材已在本地更新，稍后自动同步至云端" : "素材已在本地保存，稍后自动同步至云端");
+        } catch (error) {
+            message.warning(localSavedRemotePendingMessage(editingAsset ? "素材已在本地更新" : "素材已在本地保存", error));
         }
         setIsAssetOpen(false);
     };
@@ -373,7 +371,9 @@ export default function AssetsPage() {
             data: { url: uploaded.url, storageKey: uploaded.storageKey, bytes: uploaded.bytes, mimeType: uploaded.mimeType, fileName: file.name },
             metadata: { source: "manual" },
         });
-        message.success("3D 模型已保存");
+        // 直传失败时文件只落在本机，云端同步会重传；此时不能说成"已保存"。
+        if (uploaded.pendingRemoteUpload) message.warning(`3D 模型已保存在本机，尚未上传到服务器${uploaded.remoteUploadError ? `：${uploaded.remoteUploadError}` : ""}`);
+        else message.success("3D 模型已保存");
     };
 
     const copyAssetText = async (asset: LibraryAsset) => {
@@ -421,8 +421,8 @@ export default function AssetsPage() {
         try {
             await saveRemoteUserDataNow();
             message.success(`已还原素材「${asset.title}」`);
-        } catch {
-            message.warning("已在本地还原，稍后自动同步至云端");
+        } catch (error) {
+            message.warning(localSavedRemotePendingMessage("已在本地还原", error));
         }
     };
 
@@ -437,8 +437,8 @@ export default function AssetsPage() {
         try {
             await saveRemoteUserDataNow();
             message.success(`已还原 ${count} 个素材`);
-        } catch {
-            message.warning("已在本地还原，稍后自动同步至云端");
+        } catch (error) {
+            message.warning(localSavedRemotePendingMessage("已在本地还原", error));
         }
     };
 
@@ -448,8 +448,8 @@ export default function AssetsPage() {
         try {
             await saveRemoteUserDataNow();
             message.success(`已将「${asset.title}」移入回收站`);
-        } catch {
-            message.warning("已移入回收站，稍后自动同步至云端");
+        } catch (error) {
+            message.warning(localSavedRemotePendingMessage("已移入回收站", error));
         }
     };
 
@@ -464,8 +464,8 @@ export default function AssetsPage() {
         try {
             await saveRemoteUserDataNow();
             message.success(`已将 ${count} 个素材移入回收站`);
-        } catch {
-            message.warning("已移入回收站，稍后自动同步至云端");
+        } catch (error) {
+            message.warning(localSavedRemotePendingMessage("已移入回收站", error));
         }
     };
 
@@ -551,7 +551,7 @@ export default function AssetsPage() {
                                         </>
                                     ) : (
                                         <>
-                                            <Button className="library-primary-action" type="primary" icon={<Plus className="size-3.5" />} onClick={openCreate}>
+                                            <Button icon={<Plus className="size-3.5" />} onClick={openCreate}>
                                                 新增素材
                                             </Button>
                                             <Button icon={<Images className="size-3.5" />} onClick={() => setBatchUploadOpen(true)}>
@@ -560,7 +560,7 @@ export default function AssetsPage() {
                                             <Button icon={<FolderOpen className="size-3.5" />} onClick={() => navigate("/plugins/eagle")}>
                                                 Eagle 素材库
                                             </Button>
-                                            <IconButton variant="solid" icon={Download} aria-label="导出全部素材" title="导出全部素材" onClick={() => void exportAllAssets()} />
+                                            <Button aria-label="导出全部素材" title="导出全部素材" icon={<Download className="size-3.5" />} onClick={() => void exportAllAssets()} />
                                             <Dropdown
                                                 trigger={["click"]}
                                                 menu={{
@@ -570,7 +570,7 @@ export default function AssetsPage() {
                                                     ],
                                                 }}
                                             >
-                                                <IconButton variant="solid" icon={FileUp} aria-label="导入素材" title="导入素材" />
+                                                <Button aria-label="导入素材" title="导入素材" icon={<FileUp className="size-3.5" />} />
                                             </Dropdown>
                                         </>
                                     )}

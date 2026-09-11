@@ -40,7 +40,7 @@ export default defineConfig({
             output: {
                 strictExecutionOrder: true,
                 codeSplitting: {
-                    includeDependenciesRecursively: false,
+                    includeDependenciesRecursively: true,
                     minSize: 20 * 1024,
                     groups: [
                         {

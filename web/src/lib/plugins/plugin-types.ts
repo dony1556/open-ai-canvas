@@ -103,8 +103,10 @@ export type PluginCanvasNodeContribution = {
     defaultSize: { width: number; height: number };
     schema: Record<string, unknown>;
     renderer: "declarative" | "sandbox";
-    /** Optional input contract for nodes that consume one media kind. */
-    acceptsInputKind?: "image" | "video" | "audio" | "text";
+    /** Optional input contract for nodes that consume one or more media kinds. */
+    acceptsInputKind?: "image" | "video" | "audio" | "text" | Array<"image" | "video" | "audio" | "text">;
+    /** Optional maximum number of direct inputs. */
+    maxInputCount?: number;
     /** Analysis/sink nodes can hide the right-side output connection. */
     showOutputConnection?: boolean;
 };
@@ -315,7 +317,18 @@ export type AssetSourceProvider = {
     openAsset?: (item: ExternalAssetItem) => Promise<void>;
 };
 
+export type PluginAgentAction = {
+    id: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    /** Pure planner: validate input and return operations, never perform side effects here. */
+    buildOperations: (input: Record<string, unknown>, snapshot: import("@/lib/canvas/canvas-agent-ops").CanvasAgentSnapshot) => import("@/lib/canvas/canvas-agent-ops").CanvasAgentOp[];
+};
+
 export type RegisteredPlugin = {
+    agentActions?: PluginAgentAction[];
+    /** Pure, bounded projection: never return embedded media or provider credentials. */
+    readAgentNode?: (node: import("@/types/canvas").CanvasNodeData, snapshot: import("@/lib/canvas/canvas-agent-ops").CanvasAgentSnapshot) => Record<string, unknown>;
     /** v1 或 v2 插件清单；v2 清单结构为 v1 超集（含 editorSlots 声明）。 */
     manifest: PluginManifest | PluginManifestV2;
     source?: "bundled" | "uploaded" | string;
