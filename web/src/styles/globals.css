@@ -1694,26 +1694,6 @@
         background: var(--dock-command-hover) !important;
     }
 
-    .canvas-mode-switch-trigger {
-        border: 0;
-        box-shadow: 0 14px 34px color-mix(in srgb, var(--cn-spatial-shadow) 72%, transparent), inset 0 1px 0 rgba(255,255,255,.045);
-        transition: background-color var(--motion-instant) ease-out, color var(--motion-instant) ease-out, box-shadow var(--motion-instant) ease-out;
-    }
-
-    .canvas-mode-switch-trigger:hover:not(:disabled) {
-        background: var(--dock-command-hover) !important;
-    }
-
-    .canvas-mode-switch-menu {
-        border: 0;
-        box-shadow: 0 22px 56px color-mix(in srgb, var(--cn-spatial-shadow) 80%, transparent), inset 0 1px 0 rgba(255,255,255,.04);
-        transform-origin: bottom right;
-    }
-
-    .canvas-mode-switch-option:hover:not([aria-selected="true"]) {
-        background: var(--dock-command-hover) !important;
-    }
-
     .canvas-topbar-project-cluster {
         width: max-content;
         max-width: min(360px, calc(50vw - 88px));
@@ -2966,54 +2946,6 @@
         padding: 0 !important;
     }
 
-    .creation-mode-picker-menu {
-        width: 176px;
-        padding: 6px;
-        color: #17191d;
-    }
-
-    .dark .creation-mode-picker-menu {
-        color: #f2f4f6;
-    }
-
-    .creation-mode-picker-menu button {
-        display: flex;
-        width: 100%;
-        height: 40px;
-        align-items: center;
-        gap: 10px;
-        border-radius: 8px;
-        padding: 0 8px;
-        color: inherit;
-        font-size: 13px;
-        text-align: left;
-        transition: background-color 150ms ease;
-    }
-
-    .creation-mode-picker-menu button > svg {
-        width: 15px;
-        height: 15px;
-        margin-left: auto;
-    }
-
-    .creation-menu-icon {
-        display: grid;
-        width: 26px;
-        height: 26px;
-        place-items: center;
-        border: 1px solid #e5e7eb;
-        border-radius: 7px;
-    }
-
-    .dark .creation-menu-icon {
-        border-color: #30343b;
-    }
-
-    .creation-menu-icon svg {
-        width: 15px;
-        height: 15px;
-    }
-
     .creation-settings-panel {
         width: min(400px, calc(100vw - 24px));
         padding: 16px;
@@ -3747,7 +3679,6 @@
     .creation-chat-composer .creation-model-picker.canvas-composer-model-picker:hover,
     .creation-chat-composer .creation-model-picker.canvas-composer-model-picker[aria-expanded="true"] { border-color: rgba(255, 255, 255, .12) !important; background: #272b32 !important; transform: translateY(-1px); }
     .creation-chat-control:active { transform: scale(.98); }
-    .creation-chat-control.is-mode { border-color: rgba(6, 182, 212, .36) !important; background: rgba(5, 80, 98, .24) !important; color: #17c4e2 !important; }
     .creation-chat-control > svg { width: 15px; height: 15px; flex: 0 0 auto; }
     .creation-chat-control > svg:last-child { width: 14px; height: 14px; color: var(--creation-muted); transition: transform 160ms var(--motion-ease-out); }
     .creation-chat-control > svg:last-child.is-open { transform: rotate(180deg); }
@@ -7606,22 +7537,10 @@
             0 14px 34px rgba(15, 23, 42, 0.1);
     }
 
-    @media (max-width: 1024px) {
-        .aceternity-mode-switch {
-            top: 56px;
-        }
-    }
-
     .dark .canvas-floating-panel {
         box-shadow:
             0 1px 1px rgba(0, 0, 0, 0.28),
             0 14px 34px rgba(0, 0, 0, 0.34);
-    }
-
-    .canvas-mode-switch-trigger {
-        border: 0 !important;
-        border-color: transparent !important;
-        box-shadow: 0 14px 34px color-mix(in srgb, var(--cn-spatial-shadow) 72%, transparent), inset 0 1px 0 rgba(255,255,255,.045);
     }
 
     .canvas-tool-button,
@@ -8191,6 +8110,12 @@
         color: var(--cn-text);
         box-shadow: var(--canvas-composer-shadow);
         padding: var(--space-3);
+    }
+
+    /* 摄像机控制覆盖在提示词编辑区上方，不参与编辑区的尺寸计算。 */
+    .canvas-node-composer.has-camera-panel {
+        overflow: visible;
+        z-index: 20;
     }
 
     /* 提示词优化保持在输入框附近，使用紧凑的 Popover 作为第二层输入工具。 */
@@ -9337,6 +9262,55 @@
         background: transparent;
     }
 
+    .canvas-node-composer-camera-panel {
+        position: absolute;
+        right: var(--space-3);
+        bottom: calc(var(--space-8) + var(--space-3));
+        z-index: 20;
+        display: block;
+        width: min(780px, calc(100% - (var(--space-3) * 2)));
+        max-height: min(620px, calc(100dvh - 32px));
+        min-width: 0;
+        overflow: auto;
+        pointer-events: auto;
+        border-radius: var(--r-xl);
+    }
+
+    .canvas-node-camera-switch:hover,
+    .canvas-node-camera-switch:focus-visible {
+        box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+    }
+
+    .canvas-node-camera-apply:hover,
+    .canvas-node-camera-apply:focus-visible {
+        background: color-mix(in srgb, currentColor 10%, transparent) !important;
+    }
+
+    .canvas-reference-autolink-switch:hover,
+    .canvas-reference-autolink-switch:focus-visible {
+        box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 10%, transparent);
+    }
+
+    .canvas-node-composer-camera-tools-trigger:focus,
+    .canvas-node-composer-camera-tools-trigger:focus-visible {
+        outline: none;
+        box-shadow: none;
+    }
+
+    .canvas-reference-tools-mention-button:hover,
+    .canvas-reference-tools-mention-button:focus-visible {
+        background: color-mix(in srgb, currentColor 9%, transparent) !important;
+    }
+
+    @media (max-width: 640px) {
+        .canvas-node-composer-camera-panel {
+            right: var(--space-2);
+            left: var(--space-2);
+            bottom: calc(var(--space-8) + var(--space-2));
+            width: auto;
+        }
+    }
+
     .canvas-node-composer-references {
         display: block;
         min-width: 0;
@@ -9368,6 +9342,15 @@
         border-radius: var(--r-md);
         background: var(--canvas-composer-control-surface);
         box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
+    }
+
+    .canvas-node-reference-chip[data-connection-hover-replace="true"] {
+        position: relative;
+        outline: 2px solid #3b82f6 !important;
+        outline-offset: 1px !important;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25), 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+        transition: box-shadow 0.15s ease, outline-color 0.15s ease !important;
+        z-index: 50 !important;
     }
 
     .canvas-node-reference-chip[data-dragging="true"] {
@@ -10468,6 +10451,9 @@ html:not(.dark) .creation-chat-reference:hover:not(:disabled) { background: rgba
     gap: 2px;
 }
 
+/* 录音条自身可压缩，避免波形 + 胶囊同时出现时把右侧控件挤到第二行。 */
+.creation-chat-controls:has(> .voice-recording-inline) { flex-wrap: nowrap; }
+
 .creation-chat-control,
 .creation-chat-composer .creation-model-picker.canvas-composer-model-picker {
     display: inline-flex;
@@ -10496,11 +10482,6 @@ html:not(.dark) .creation-chat-reference:hover:not(:disabled) { background: rgba
     transform: none;
 }
 
-.creation-chat-control.is-mode {
-    background: rgba(255, 255, 255, .075) !important;
-    color: var(--creation-text) !important;
-}
-
 .creation-chat-control[aria-pressed="true"],
 .creation-chat-control[aria-pressed="true"]:hover {
     background: rgba(6, 182, 212, .16) !important;
@@ -10517,9 +10498,30 @@ html:not(.dark) .creation-chat-reference:hover:not(:disabled) { background: rgba
 
 html:not(.dark) .creation-chat-control,
 html:not(.dark) .creation-chat-composer .creation-model-picker.canvas-composer-model-picker { background: transparent !important; color: var(--creation-muted) !important; }
-html:not(.dark) .creation-chat-control.is-mode,
 html:not(.dark) .creation-chat-control:hover,
 html:not(.dark) .creation-chat-composer .creation-model-picker.canvas-composer-model-picker:hover { background: rgba(29, 33, 37, .06) !important; color: var(--creation-text) !important; }
+
+.creation-mode-capsule {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .06);
+    padding: 2px;
+}
+.creation-mode-capsule .creation-chat-control { height: 24px !important; border-radius: 999px !important; }
+.creation-mode-capsule .creation-chat-control:hover,
+.creation-home .creation-mode-capsule .creation-chat-control:hover { background: rgba(255, 255, 255, .09) !important; color: var(--creation-text) !important; }
+.creation-mode-capsule .creation-chat-control[aria-pressed="true"],
+.creation-mode-capsule .creation-chat-control[aria-pressed="true"]:hover,
+.creation-home .creation-mode-capsule .creation-chat-control[aria-pressed="true"]:hover { background: var(--control-selected-bg) !important; color: var(--control-selected-fg) !important; }
+.creation-mode-capsule .creation-chat-control[aria-pressed="true"] > svg { color: var(--control-selected-fg) !important; }
+html:not(.dark) .creation-mode-capsule { background: rgba(28, 32, 37, .05); }
+html:not(.dark) .creation-mode-capsule .creation-chat-control:hover { background: rgba(28, 32, 37, .07) !important; }
+html:not(.dark) .creation-mode-capsule .creation-chat-control[aria-pressed="true"],
+html:not(.dark) .creation-mode-capsule .creation-chat-control[aria-pressed="true"]:hover { background: var(--control-selected-bg) !important; color: var(--control-selected-fg) !important; }
+html:not(.dark) .creation-mode-capsule .creation-chat-control[aria-pressed="true"] > svg { color: var(--control-selected-fg) !important; }
 
 .creation-chat-control:disabled {
     opacity: .42 !important;
@@ -10590,14 +10592,6 @@ html:not(.dark) .creation-chat-control[aria-pressed="true"] > svg { color: #0e74
 .creation-range-wrap input::-moz-range-thumb { width: 6px; height: 14px; border-radius: 4px; }
 .creation-range-labels { margin-top: 2px; color: var(--creation-faint); font-size: 9px; }
 
-.creation-mode-picker-menu { width: 158px; padding: 5px; color: #f0f1f2; }
-.creation-mode-picker-menu button { display: flex; width: 100%; height: 34px; align-items: center; gap: 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; padding: 0 7px; font-size: 11px; text-align: left; }
-.creation-mode-picker-menu button:hover { background: var(--control-selected-bg); }
-.creation-mode-picker-menu button.is-selected { background: var(--control-selected-bg); color: var(--control-selected-fg); }
-.creation-mode-picker-menu button > svg { width: 13px; height: 13px; margin-left: auto; }
-.creation-menu-icon { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 5px; background: rgba(255, 255, 255, .07); }
-.creation-menu-icon svg { width: 12px; height: 12px; }
-
 .creation-model-picker-menu { width: min(332px, calc(100vw - 24px)) !important; max-height: min(420px, calc(100vh - 24px)); padding: 7px !important; background: transparent !important; color: #f0f1f2 !important; }
 .creation-model-picker-heading { display: flex; align-items: center; gap: 6px; padding: 4px 7px 7px; color: #8e949d; font-size: 10px; }
 .creation-model-picker-heading strong { color: #e6e8eb; font-weight: 500; }
@@ -10624,13 +10618,11 @@ html:not(.dark) .creation-control-popover-surface,
 html:not(.dark) .creation-model-picker-surface { background: rgba(255, 255, 255, .94) !important; box-shadow: 0 16px 38px rgba(28, 32, 37, .12) !important; }
 html:not(.dark) .creation-parameter-section h3,
 html:not(.dark) .creation-duration-menu > div:first-child,
-html:not(.dark) .creation-mode-picker-menu,
 html:not(.dark) .creation-model-picker-menu { color: #727980 !important; }
 html:not(.dark) .creation-choice-grid button { color: #737a82; }
 html:not(.dark) .creation-choice-grid button:hover { background: rgba(28, 32, 37, .06); color: #25292e; }
 html:not(.dark) .creation-duration-menu strong,
 html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
-html:not(.dark) .creation-mode-picker-menu button:hover,
 html:not(.dark) .creation-model-picker-menu .canvas-model-picker-option > span:first-child > span:first-child { background: rgba(28, 32, 37, .06) !important; }
 
 @keyframes creation-composer-arrive {
@@ -10643,6 +10635,7 @@ html:not(.dark) .creation-model-picker-menu .canvas-model-picker-option > span:f
     .creation-chat-writing-surface, .creation-chat-composer.is-empty .creation-chat-writing-surface { grid-template-columns: 30px minmax(0, 1fr); gap: 8px; padding: 14px 12px 5px; }
     .creation-chat-dock { align-items: flex-end; padding: 4px 7px 8px 8px; }
     .creation-chat-controls { max-width: none; }
+    .creation-chat-controls:has(> .voice-recording-inline) { flex-wrap: wrap; }
     .creation-chat-control, .creation-chat-composer .creation-model-picker.canvas-composer-model-picker { height: 29px !important; padding: 0 6px !important; font-size: 10px; }
     .creation-chat-composer .creation-model-picker.canvas-composer-model-picker { width: min(136px, 42vw) !important; }
     .creation-thread-stage, .creation-thread-composer { width: calc(100% - 28px); }
@@ -11527,8 +11520,7 @@ html:not(.dark) .creation-duration-choices button:hover { background: rgba(28, 3
 .creation-home .creation-chat-dock { min-height: 48px; padding: 4px 12px 12px 16px; }
 
 .creation-home .creation-chat-control,
-.creation-home .creation-chat-composer .creation-model-picker.canvas-composer-model-picker,
-.creation-home .creation-chat-control.is-mode {
+.creation-home .creation-chat-composer .creation-model-picker.canvas-composer-model-picker {
     border: 0 !important;
     background: transparent !important;
     box-shadow: none !important;
@@ -11545,16 +11537,14 @@ html:not(.dark) .creation-duration-choices button:hover { background: rgba(28, 3
     transform: none;
 }
 
-.creation-home .creation-chat-control.is-mode { color: var(--creation-text) !important; }
-.creation-home .creation-chat-control.is-mode > svg:first-child { color: var(--creation-text); }
 html:not(.dark) .creation-home .creation-chat-control:hover,
 html:not(.dark) .creation-home .creation-chat-control[aria-expanded="true"],
 html:not(.dark) .creation-home .creation-chat-composer .creation-model-picker.canvas-composer-model-picker:hover { background: rgba(28, 32, 37, .06) !important; }
 
 .creation-home .creation-chat-controls > .voice-recording-inline {
-    width: min(236px, calc(100vw - 120px));
     max-width: 236px;
-    flex: 0 1 236px;
+    flex: 1 1 236px;
+    min-width: 140px;
     min-height: 30px;
     height: 30px;
     overflow: hidden;
@@ -11566,6 +11556,7 @@ html:not(.dark) .creation-home .creation-chat-composer .creation-model-picker.ca
 .creation-home .creation-chat-controls > .voice-recording-inline > svg {
     flex: 0 1 160px;
     max-width: 160px;
+    min-width: 0;
 }
 
 .creation-chat-intro h1 > .creation-intro-emphasis {
@@ -12797,8 +12788,7 @@ html:not(.dark) .creation-media-preview-modal .ant-modal-container { background:
 /* 旧创作规则位于 utilities 层且使用 !important；必须在同层覆盖。 */
 @layer utilities {
     .creation-home .creation-chat-control,
-    .creation-home .creation-chat-composer .creation-model-picker.canvas-composer-model-picker,
-    .creation-home .creation-chat-control.is-mode {
+    .creation-home .creation-chat-composer .creation-model-picker.canvas-composer-model-picker {
         border: 0 !important;
         background: transparent !important;
         box-shadow: none !important;
@@ -12814,8 +12804,6 @@ html:not(.dark) .creation-media-preview-modal .ant-modal-container { background:
         color: var(--creation-text) !important;
         transform: none;
     }
-
-    .creation-home .creation-chat-control.is-mode { color: var(--creation-text) !important; }
 
     .creation-parameter-menu {
         width: 304px;
@@ -13077,6 +13065,22 @@ html:not(.dark) .creation-media-preview-modal .ant-modal-container { background:
 }
 
 .creation-custom-value em { color: var(--creation-muted); font-size: 11px; font-style: normal; }
+
+/* 首页图像参数保持紧凑，避免比例预设把弹层撑成整屏高度。 */
+.creation-parameter-menu .image-size-picker {
+    gap: 7px;
+}
+
+.creation-parameter-menu .image-size-ratios {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+}
+
+.creation-parameter-menu .image-size-ratios button {
+    min-height: 48px;
+    gap: 4px;
+    padding: 5px;
+}
 
 .creation-duration-custom-field {
     display: inline-flex;
@@ -14510,8 +14514,6 @@ html:not(.dark) .creation-history-drawer-root {
 .skill-install-modal .ant-modal-title { font-size: var(--fs-heading-lg); font-weight: 620; }
 .skill-install-modal .ant-upload-wrapper .ant-upload-drag { border-color: color-mix(in srgb, var(--foreground) 14%, transparent); border-radius: var(--r-lg); background: color-mix(in srgb, var(--foreground) 2.5%, transparent); }
 .skill-install-modal .ant-upload-wrapper .ant-upload-drag:hover { border-color: color-mix(in srgb, var(--foreground) 28%, transparent); }
-.skill-install-mode { padding: 3px; }
-.skill-install-mode [role="radio"] { min-height: 34px; }
 .skill-install-modal .skill-install-form { margin-top: 16px; }
 
 .skill-package-modal .ant-modal-container { border: 1px solid color-mix(in srgb, var(--foreground) 11%, transparent); border-radius: var(--r-xl); background: var(--popover); box-shadow: var(--elevation-panel); }
