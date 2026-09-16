@@ -1,11 +1,11 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
-import { Clapperboard, Image as ImageIcon, List, Music2, Pencil, Video, WandSparkles, Workflow as WorkflowIcon } from "lucide-react";
+import { Clapperboard, Image as ImageIcon, List, Music2, Pencil, Table2, Video, WandSparkles, Workflow as WorkflowIcon } from "lucide-react";
 
 import { useCanvasOverlayLayer } from "@/components/canvas/canvas-overlay-layer";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { aceternityMotion } from "@/lib/aceternity-motion";
-import { subscribeCanvasGraphicsViewportPreview, subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
+import { subscribeCanvasGraphicsViewportPreview, subscribeCanvasNodeDragPreview, subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ConnectionHandle, type Position, type ViewportTransform } from "@/types/canvas";
 
@@ -102,19 +102,16 @@ export function CanvasNodePanelOverlay({ node, viewport, containerRef, panelWidt
         const panel = panelRef.current;
         if (!container || !panel) return;
         let liveViewport = viewport;
+        let liveDragOffset = dragOffset;
         let viewportSize = { width: container.clientWidth, height: container.clientHeight };
         const update = (nextViewport: ViewportTransform) => {
             liveViewport = nextViewport;
             const nextWidth = resolveNodePanelWidth(node, nextViewport, panelWidth);
             panel.style.width = `${nextWidth}px`;
-            const position = getNodePanelPosition(
-                node,
-                nextViewport,
-                viewportSize,
-                nextWidth,
-                panelHeight,
-                dragOffset,
-            );
+            const nodeElement = container.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(node.id)}"]`);
+            const position = nodeElement
+                ? getAttachedNodePanelPosition(nodeElement, container, nextWidth)
+                : getNodePanelPosition(node, nextViewport, viewportSize, nextWidth, panelHeight, liveDragOffset);
             panel.style.transform = `translate3d(${position.left}px, ${position.top}px, 0)`;
         };
         update(viewport);
@@ -124,9 +121,14 @@ export function CanvasNodePanelOverlay({ node, viewport, containerRef, panelWidt
         });
         resizeObserver.observe(container);
         const unsubscribeViewport = subscribeCanvasGraphicsViewportPreview(container, update);
+        const unsubscribeDrag = subscribeCanvasNodeDragPreview(container, (preview) => {
+            liveDragOffset = preview?.nodeIds.has(node.id) ? { x: preview.x, y: preview.y } : null;
+            update(liveViewport);
+        });
         return () => {
             resizeObserver.disconnect();
             unsubscribeViewport();
+            unsubscribeDrag();
         };
     }, [containerRef, dragOffset?.x, dragOffset?.y, isDragging, node.height, node.id, node.position.x, node.position.y, node.width, panelHeight, panelWidth, viewport]);
 
@@ -152,7 +154,7 @@ function resolveNodePanelWidth(node: CanvasNodeData, viewport: ViewportTransform
     return clamp(Math.round(node.width * viewport.k * 1.5), 680, 920);
 }
 
-export function CanvasConnectionCreateMenu({ pending, viewport, viewportSize, containerRef, canCreateDrawing, getDisabledReason, onCreate, onClose }: { pending: PendingConnectionCreate; viewport: ViewportTransform; viewportSize: { width: number; height: number }; containerRef: RefObject<HTMLDivElement | null>; canCreateDrawing: boolean; getDisabledReason: (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, provider?: "runninghub" | "comfyui") => string; onCreate: (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, provider?: "runninghub" | "comfyui") => void; onClose: () => void }) {
+export function CanvasConnectionCreateMenu({ pending, viewport, viewportSize, containerRef, canCreateDrawing, getDisabledReason, onCreate, onClose }: { pending: PendingConnectionCreate; viewport: ViewportTransform; viewportSize: { width: number; height: number }; containerRef: RefObject<HTMLDivElement | null>; canCreateDrawing: boolean; getDisabledReason: (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.BatchTable | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, provider?: "runninghub") => string; onCreate: (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.BatchTable | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, provider?: "runninghub") => void; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const reducedMotion = useReducedMotion();
     const menuRef = useRef<HTMLDivElement>(null);
@@ -160,7 +162,7 @@ export function CanvasConnectionCreateMenu({ pending, viewport, viewportSize, co
     const lastPointerRef = useRef<Position | null>(null);
     const { bringToFront, zIndex } = useCanvasOverlayLayer("connection-create-menu", "var(--z-modal-overlay)");
     const menuWidth = Math.min(288, viewportSize.width - 24);
-    const menuHeight = canCreateDrawing ? 404 : 360;
+    const menuHeight = canCreateDrawing ? 448 : 404;
     const gap = 12;
     const initialPosition = getConnectionMenuPosition(pending.position, viewport, viewportSize, menuWidth, menuHeight, gap);
 
@@ -226,6 +228,7 @@ export function CanvasConnectionCreateMenu({ pending, viewport, viewportSize, co
             <div className="grid min-w-0 grid-cols-1 gap-1">
                 <ConnectionCreateOption expanded={activeOption === "文本生成"} motionEnabled={!reducedMotion} icon={<List className="size-4" />} title="文本生成" description="引用当前内容，生成或改写文本" disabledReason={getDisabledReason(CanvasNodeType.Text)} onClick={() => onCreate(CanvasNodeType.Text)} />
                 <ConnectionCreateOption expanded={activeOption === "分镜脚本"} motionEnabled={!reducedMotion} icon={<Clapperboard className="size-4" />} title="分镜脚本" description="根据剧情拆解镜头，编排分镜脚本" disabledReason={getDisabledReason(CanvasNodeType.Script)} onClick={() => onCreate(CanvasNodeType.Script)} />
+                <ConnectionCreateOption expanded={activeOption === "批量创作表"} motionEnabled={!reducedMotion} icon={<Table2 className="size-4" />} title="批量创作表" description="汇总多张图片，批量执行换装或创意生图" disabledReason={getDisabledReason(CanvasNodeType.BatchTable)} onClick={() => onCreate(CanvasNodeType.BatchTable)} />
                 <ConnectionCreateOption expanded={activeOption === "图片生成"} motionEnabled={!reducedMotion} icon={<ImageIcon className="size-4" />} title="图片生成" description="结合提示词和参考图，生成新的画面" disabledReason={getDisabledReason(CanvasNodeType.Image)} onClick={() => onCreate(CanvasNodeType.Image)} />
                 <ConnectionCreateOption expanded={activeOption === "生成配置"} motionEnabled={!reducedMotion} icon={<WorkflowIcon className="size-4" />} title="生成配置" description="选择模型，或使用已启用的工作流插件" disabledReason={getDisabledReason(CanvasNodeType.Config)} onClick={() => onCreate(CanvasNodeType.Config)} />
                 {canCreateDrawing ? <ConnectionCreateOption expanded={activeOption === "绘图"} motionEnabled={!reducedMotion} icon={<Pencil className="size-4" />} title="绘图" description="以参考图片为底图，自由绘制和标注" disabledReason={getDisabledReason(CanvasNodeType.Drawing)} onClick={() => onCreate(CanvasNodeType.Drawing)} /> : null}
@@ -263,17 +266,25 @@ function getConnectionMenuPosition(position: Position, viewport: ViewportTransfo
     };
 }
 
-export function getNodePanelPosition(node: CanvasNodeData, viewport: ViewportTransform, viewportSize: { width: number; height: number }, panelWidth: number, _panelHeight: number, dragOffset?: Position | null) {
+function getAttachedNodePanelPosition(nodeElement: HTMLElement, container: HTMLElement, panelWidth: number) {
     const gap = 10;
-    const margin = 12;
+    const nodeRect = nodeElement.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    return {
+        left: nodeRect.left - containerRect.left + nodeRect.width / 2 - panelWidth / 2,
+        top: nodeRect.bottom - containerRect.top + gap,
+        placement: "below" as const,
+    };
+}
+
+export function getNodePanelPosition(node: CanvasNodeData, viewport: ViewportTransform, _viewportSize: { width: number; height: number }, panelWidth: number, _panelHeight: number, dragOffset?: Position | null) {
+    const gap = 10;
     const offsetX = dragOffset?.x || 0;
     const offsetY = dragOffset?.y || 0;
     const nodeCenterX = viewport.x + (node.position.x + offsetX + node.width / 2) * viewport.k;
     const nodeBottom = viewport.y + (node.position.y + offsetY + node.height) * viewport.k;
-    const maxLeft = Math.max(margin, viewportSize.width - panelWidth - margin);
-    const left = clamp(nodeCenterX - panelWidth / 2, margin, maxLeft);
     return {
-        left,
+        left: nodeCenterX - panelWidth / 2,
         top: nodeBottom + gap,
         placement: "below" as const,
     };

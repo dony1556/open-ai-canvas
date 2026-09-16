@@ -57,17 +57,19 @@ func runAgentToolTask(ctx context.Context, input canvasGenerationInput) (map[str
 		body = claudeAgentBody(body)
 	}
 	body["model"] = input.Config.Model
-	result, err := postStreamingAgent(ctx, input.Config, path, body, protocol, input.OnTextDelta)
+	applyTextThinking(body, input, protocol)
+	normalizeAgentToolChoice(body, input, protocol)
+	result, err := postAgentRequest(ctx, input, path, body, protocol)
 	if protocol == "chat-completion" && isAgentToolChoiceCompatibilityError(err) {
 		if !isAutoAgentToolChoice(body["tool_choice"]) {
 			autoBody := cloneStringAnyMap(body)
 			autoBody["tool_choice"] = "auto"
-			result, err = postStreamingAgent(ctx, input.Config, path, autoBody, protocol, input.OnTextDelta)
+			result, err = postAgentRequest(ctx, input, path, autoBody, protocol)
 		}
 		if isAgentToolChoiceCompatibilityError(err) {
 			withoutToolChoice := cloneStringAnyMap(body)
 			delete(withoutToolChoice, "tool_choice")
-			result, err = postStreamingAgent(ctx, input.Config, path, withoutToolChoice, protocol, input.OnTextDelta)
+			result, err = postAgentRequest(ctx, input, path, withoutToolChoice, protocol)
 		}
 	}
 	if err != nil {
@@ -76,7 +78,27 @@ func runAgentToolTask(ctx context.Context, input canvasGenerationInput) (map[str
 	return result, nil
 }
 
+func postAgentRequest(ctx context.Context, input canvasGenerationInput, path string, body map[string]interface{}, protocol string) (map[string]interface{}, error) {
+	if input.StreamText {
+		return postStreamingAgent(ctx, input.Config, path, body, protocol, input.OnTextDelta, input.OnReasoningDelta)
+	}
+	delete(body, "stream")
+	var payload map[string]interface{}
+	if err := postJSON(ctx, input.Config, path, body, &payload); err != nil {
+		return nil, err
+	}
+	return parseAgentToolPayload(payload, protocol)
+}
+
 func runDeclarativeAgentTask(ctx context.Context, input canvasGenerationInput, adapter protocol.AgentAdapter) (map[string]interface{}, error) {
+	wire := input.Config.InterfaceType
+	if wire == string(model.ChannelInterfaceOpenAIResponse) {
+		wire = "responses"
+	}
+	knownWire := wire == "chat-completion" || wire == "responses" || wire == "claude-api"
+	if input.TextOptions.Thinking && !knownWire {
+		return nil, errors.New("当前声明式 Agent 渠道尚不支持思考模式，请关闭思考模式或切换内置协议渠道")
+	}
 	if input.AgentRequests == nil {
 		return nil, errors.New("画布 Agent 工具请求缺少协议参数")
 	}
@@ -89,6 +111,38 @@ func runDeclarativeAgentTask(ctx context.Context, input canvasGenerationInput, a
 	spec, err := adapter.BuildAgent(ctx, protocol.AgentRequestContext{BaseURL: input.Config.BaseURL, Model: input.Config.Model, Request: request})
 	if err != nil {
 		return nil, err
+	}
+	if knownWire {
+		body := protocolBodyObject(spec.Body)
+		if body == nil {
+			return nil, errors.New("声明式 Agent 请求体必须是 JSON 对象")
+		}
+		applyTextThinking(body, input, wire)
+		normalizeAgentToolChoice(body, input, wire)
+		spec.Body = body
+		if input.StreamText {
+			body["stream"] = true
+			if wire == "chat-completion" {
+				if err := ensureChatCompletionStreamUsage(body); err != nil {
+					return nil, err
+				}
+			}
+			parser := newStreamingAgentParser(wire, input.OnTextDelta)
+			parser.emitReasoning = input.OnReasoningDelta
+			data, mime, err := executeProtocolBinaryRequestWithConsumer(ctx, input.Config, spec, parser.consume)
+			if err != nil {
+				return nil, err
+			}
+			if strings.Contains(strings.ToLower(mime), "event-stream") {
+				parser.flush()
+				return parser.result()
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal(data, &payload); err != nil {
+				return nil, fmt.Errorf("Agent 接口返回格式无效：%w", err)
+			}
+			return parseAgentToolPayload(payload, wire)
+		}
 	}
 	body, err := executeProtocolRequest(ctx, input.Config, spec)
 	if err != nil {
@@ -314,17 +368,17 @@ func parseAgentToolPayload(payload map[string]interface{}, protocol string) (map
 	return result, nil
 }
 
-func postStreamingAgent(ctx context.Context, config providerConfig, path string, body map[string]interface{}, protocol string, onDelta func(string)) (map[string]interface{}, error) {
+func postStreamingAgent(ctx context.Context, config providerConfig, path string, body map[string]interface{}, protocol string, onDelta func(string), onReasoning ...func(string)) (map[string]interface{}, error) {
 	body["stream"] = true
 	if protocol == "chat-completion" {
-		metadata, _ := ctx.Value(providerAnalyticsKey{}).(providerAnalyticsContext)
-		if metadata.BillingMode == "token" {
-			if err := ensureChatCompletionStreamUsage(body); err != nil {
-				return nil, err
-			}
+		if err := ensureChatCompletionStreamUsage(body); err != nil {
+			return nil, err
 		}
 	}
 	parser := newStreamingAgentParser(protocol, onDelta)
+	if len(onReasoning) > 0 {
+		parser.emitReasoning = onReasoning[0]
+	}
 	data, mimeType, err := postStreamingBinary(ctx, config, path, body, parser.consume)
 	if err != nil {
 		return nil, err
@@ -347,15 +401,16 @@ type streamingAgentToolCall struct {
 }
 
 type streamingAgentParser struct {
-	protocol     string
-	buffer       string
-	text         strings.Builder
-	reasoning    strings.Builder
-	toolCalls    map[int]*streamingAgentToolCall
-	toolCallByID map[string]int
-	completed    map[string]interface{}
-	err          error
-	emit         func(string)
+	protocol      string
+	buffer        string
+	text          strings.Builder
+	reasoning     strings.Builder
+	toolCalls     map[int]*streamingAgentToolCall
+	toolCallByID  map[string]int
+	completed     map[string]interface{}
+	err           error
+	emit          func(string)
+	emitReasoning func(string)
 }
 
 func newStreamingAgentParser(protocol string, emit func(string)) *streamingAgentParser {
@@ -432,7 +487,7 @@ func (p *streamingAgentParser) consumeResponsesEvent(eventName string, payload m
 	case "response.output_text.delta", "output_text.delta":
 		p.appendText(stringField(payload, "delta"))
 	case "response.reasoning.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
-		p.reasoning.WriteString(stringField(payload, "delta"))
+		p.appendReasoning(stringField(payload, "delta"))
 	case "response.completed":
 		p.completed, _ = payload["response"].(map[string]interface{})
 	case "response.output_item.added":
@@ -466,7 +521,7 @@ func (p *streamingAgentParser) consumeChatCompletionEvent(payload map[string]int
 		choice, _ := value.(map[string]interface{})
 		delta, _ := choice["delta"].(map[string]interface{})
 		p.appendText(streamContentText(delta["content"]))
-		p.reasoning.WriteString(firstNonEmptyString(stringField(delta, "reasoning_content"), stringField(delta, "reasoning"), stringField(delta, "reasoning_text")))
+		p.appendReasoning(firstNonEmptyString(stringField(delta, "reasoning_content"), stringField(delta, "reasoning"), stringField(delta, "reasoning_text")))
 		for fallbackIndex, toolValue := range interfaceSlice(delta["tool_calls"]) {
 			tool, _ := toolValue.(map[string]interface{})
 			index := intField(tool, "index", fallbackIndex)
@@ -493,7 +548,7 @@ func (p *streamingAgentParser) consumeClaudeEvent(payload map[string]interface{}
 		case "text":
 			p.appendText(stringField(block, "text"))
 		case "thinking":
-			p.reasoning.WriteString(firstNonEmptyString(stringField(block, "thinking"), stringField(block, "text")))
+			p.appendReasoning(firstNonEmptyString(stringField(block, "thinking"), stringField(block, "text")))
 		case "tool_use":
 			arguments := ""
 			if input := block["input"]; input != nil {
@@ -510,7 +565,7 @@ func (p *streamingAgentParser) consumeClaudeEvent(payload map[string]interface{}
 			p.appendText(stringField(delta, "text"))
 		}
 		if stringField(delta, "type") == "thinking_delta" {
-			p.reasoning.WriteString(firstNonEmptyString(stringField(delta, "thinking"), stringField(delta, "text")))
+			p.appendReasoning(firstNonEmptyString(stringField(delta, "thinking"), stringField(delta, "text")))
 		}
 		if stringField(delta, "type") == "input_json_delta" {
 			p.toolCall(index).arguments += stringField(delta, "partial_json")
@@ -532,6 +587,16 @@ func (p *streamingAgentParser) appendText(delta string) {
 	p.text.WriteString(delta)
 	if p.emit != nil {
 		p.emit(delta)
+	}
+}
+
+func (p *streamingAgentParser) appendReasoning(delta string) {
+	if delta == "" {
+		return
+	}
+	p.reasoning.WriteString(delta)
+	if p.emitReasoning != nil {
+		p.emitReasoning(delta)
 	}
 }
 
@@ -755,6 +820,16 @@ func applyTextThinking(body map[string]interface{}, input canvasGenerationInput,
 		body["reasoning_effort"] = "medium"
 	case "claude-api":
 		body["thinking"] = map[string]interface{}{"type": "enabled", "budget_tokens": 1024}
+	}
+}
+
+// Chat Completion defaults to automatic tool selection when tools are present,
+// so an explicit "auto" only reduces compatibility. Reasoning endpoints also
+// disagree on forced choices. Normalize before the first network request while
+// preserving required/named choices for non-reasoning structured tasks.
+func normalizeAgentToolChoice(body map[string]interface{}, input canvasGenerationInput, protocol string) {
+	if protocol == "chat-completion" && (input.TextOptions.Thinking || isAutoAgentToolChoice(body["tool_choice"])) {
+		delete(body, "tool_choice")
 	}
 }
 

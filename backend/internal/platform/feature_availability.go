@@ -26,6 +26,7 @@ const (
 )
 
 type FeatureAvailability struct {
+	WelcomeEnabled               bool `json:"welcomeEnabled"`
 	ShortDramaEnabled            bool `json:"shortDramaEnabled"`
 	TaskCenterEnabled            bool `json:"taskCenterEnabled"`
 	CreditsEnabled               bool `json:"creditsEnabled"`
@@ -38,15 +39,15 @@ type FeatureAvailability struct {
 
 type PublicFeatureAvailability struct {
 	FeatureAvailability
-	DesktopLocalChannelsEnabled bool      `json:"desktopLocalChannelsEnabled"`
-	Configured                  bool      `json:"configured"`
-	UpdatedBy                   string    `json:"updatedBy,omitempty"`
-	UpdatedAt                   time.Time `json:"updatedAt,omitempty"`
+	Configured bool      `json:"configured"`
+	UpdatedBy  string    `json:"updatedBy,omitempty"`
+	UpdatedAt  time.Time `json:"updatedAt,omitempty"`
 }
 
 func DefaultFeatureAvailability() FeatureAvailability {
 	// 缺少配置代表尚未由运维接管；前台模型需要明确配置后才开放。
 	return FeatureAvailability{
+		WelcomeEnabled:               true,
 		ShortDramaEnabled:            true,
 		TaskCenterEnabled:            true,
 		CreditsEnabled:               true,
@@ -63,7 +64,7 @@ func (s *Service) FeatureAvailability() (*PublicFeatureAvailability, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.withRuntimeCapabilities(publicFeatureAvailability(setting, value)), nil
+	return publicFeatureAvailability(setting, value), nil
 }
 
 func (s *Service) AdminFeatureAvailability(actor *model.User) (*PublicFeatureAvailability, error) {
@@ -95,7 +96,7 @@ func (s *Service) UpdateFeatureAvailability(actor *model.User, value FeatureAvai
 	if err := s.appendAdminAudit(actor, "feature_availability.update", "system_setting", featureAvailabilitySettingKey, "更新功能开放配置", map[string]any{"before": before, "after": value}); err != nil {
 		return nil, err
 	}
-	return s.withRuntimeCapabilities(publicFeatureAvailability(&setting, value)), nil
+	return publicFeatureAvailability(&setting, value), nil
 }
 
 func (s *Service) FeatureEnabled(feature string) (bool, error) {
@@ -169,13 +170,6 @@ func (s *Service) readFeatureAvailability() (*model.SystemSetting, FeatureAvaila
 		return nil, FeatureAvailability{}, errors.New("功能开放配置格式无效")
 	}
 	return setting, value, nil
-}
-
-func (s *Service) withRuntimeCapabilities(result *PublicFeatureAvailability) *PublicFeatureAvailability {
-	if result != nil {
-		result.DesktopLocalChannelsEnabled = s.desktopLocalChannelsEnabled()
-	}
-	return result
 }
 
 func publicFeatureAvailability(setting *model.SystemSetting, value FeatureAvailability) *PublicFeatureAvailability {

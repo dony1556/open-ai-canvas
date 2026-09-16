@@ -128,8 +128,8 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
 }
 
 /**
- * 转换节点允许提前连到下游，但只有已物化的结果才能进入生成请求。
- * 沿上游链路检查也覆盖“生成节点 -> 配置节点 -> 转换节点”的常见接法。
+ * 转换节点允许提前连到下游，但只有与当前唯一媒体输入匹配的已物化结果才能进入生成请求。
+ * 沿上游链路检查也覆盖“生成节点 -> 配置节点 -> 转换节点”的接法。
  */
 export function findPendingMediaConversionInput(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     const nodesById = new Map(nodes.map((node) => [node.id, node]));

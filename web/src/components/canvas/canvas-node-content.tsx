@@ -20,7 +20,6 @@ import { resolveMediaUrl } from "@/services/file-storage";
 import { hydrateCanvasVideoPreview } from "@/services/canvas-video-preview";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
-import { PORTRAIT_CLEARANCE_NODE_TYPE } from "@/lib/portrait-clearance/contracts";
 import { ART_CRITIQUE_NODE_TYPE } from "@/lib/art-critique/contracts";
 import { createDefaultSubtitleStyle } from "@/types/timeline";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
@@ -35,7 +34,6 @@ import { ColorGradeNodeContent } from "./nodes/color-grade-node";
 import { HtmlNodeContent } from "./nodes/html-node";
 import { PanoramaNodeContent } from "./nodes/panorama-node";
 import { SvgNodeContent } from "./nodes/svg-node";
-import { PortraitClearanceNodeContent } from "./nodes/portrait-clearance-node";
 import { ArtCritiqueNodeContent } from "./nodes/ai-art-critique-node";
 import { MediaConversionNodeContent } from "./nodes/media-conversion-node";
 import { MEDIA_CONVERSION_NODE_TYPE } from "@/lib/media-conversion/contracts";
@@ -69,12 +67,12 @@ export function CanvasNodeContent(props: CanvasNodeContentProps) {
     if (props.node.metadata?.fileUpload) return <CanvasFileUploadContent node={props.node} theme={props.theme} reduceMotion={props.reduceMediaEffects} />;
     const hasCustomContent = props.node.type === CanvasNodeType.Config
         || props.node.type === CanvasNodeType.Script
+        || props.node.type === CanvasNodeType.BatchTable
         || Boolean(props.node.metadata?.directorSceneId)
         || (props.node.metadata?.workflowKind === "character" && Boolean(props.node.metadata.characterAssetId))
         || (props.node.metadata?.workflowKind === "story_input" && !props.isEditingContent)
         || (props.node.metadata?.workflowKind === "styleboard" && !props.node.metadata.content);
     if (hasCustomContent && props.renderNodeContent) return props.renderNodeContent(props.node);
-    if (props.node.type === PORTRAIT_CLEARANCE_NODE_TYPE) return <PortraitClearanceNodeContent node={props.node} />;
     if (props.node.type === ART_CRITIQUE_NODE_TYPE) return <ArtCritiqueNodeContent node={props.node} />;
     if (props.node.type === MEDIA_CONVERSION_NODE_TYPE) return <MediaConversionNodeContent node={props.node} theme={props.theme} />;
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;

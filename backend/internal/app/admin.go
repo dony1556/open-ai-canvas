@@ -91,7 +91,6 @@ type ChannelRequest struct {
 	PublicAlias          *string          `json:"publicAlias"`
 	SortOrder            *int             `json:"sortOrder"`
 	BaseURL              string           `json:"baseUrl"`
-	AllowLocalChannel    *bool            `json:"allowLocalChannel"`
 	APIKey               string           `json:"apiKey"`
 	SecretKey            string           `json:"secretKey"`
 	ConcurrencyLimit     *int             `json:"concurrencyLimit"`
@@ -102,25 +101,24 @@ type ChannelRequest struct {
 }
 
 type PublicModelChannel struct {
-	ID                string                    `json:"id"`
-	UserID            string                    `json:"userId"`
-	Scope             model.ChannelScope        `json:"scope"`
-	Enabled           bool                      `json:"enabled"`
-	Name              string                    `json:"name"`
-	PublicAlias       string                    `json:"publicAlias,omitempty"`
-	SortOrder         int                       `json:"sortOrder"`
-	BaseURL           string                    `json:"baseUrl"`
-	AllowLocalChannel bool                      `json:"allowLocalChannel,omitempty"`
-	APIKey            string                    `json:"apiKey"`
-	APIFormat         string                    `json:"apiFormat"`
-	ConcurrencyLimit  int                       `json:"concurrencyLimit"`
-	Models            []string                  `json:"models"`
-	ModelCosts        []PublicChannelModelPrice `json:"modelCosts"`
-	Headers           []OutboundHeader          `json:"headers,omitempty"`
-	HasAPIKey         bool                      `json:"hasApiKey"`
-	HasSecretKey      bool                      `json:"hasSecretKey"`
-	CreatedAt         time.Time                 `json:"createdAt"`
-	UpdatedAt         time.Time                 `json:"updatedAt"`
+	ID               string                    `json:"id"`
+	UserID           string                    `json:"userId"`
+	Scope            model.ChannelScope        `json:"scope"`
+	Enabled          bool                      `json:"enabled"`
+	Name             string                    `json:"name"`
+	PublicAlias      string                    `json:"publicAlias,omitempty"`
+	SortOrder        int                       `json:"sortOrder"`
+	BaseURL          string                    `json:"baseUrl"`
+	APIKey           string                    `json:"apiKey"`
+	APIFormat        string                    `json:"apiFormat"`
+	ConcurrencyLimit int                       `json:"concurrencyLimit"`
+	Models           []string                  `json:"models"`
+	ModelCosts       []PublicChannelModelPrice `json:"modelCosts"`
+	Headers          []OutboundHeader          `json:"headers,omitempty"`
+	HasAPIKey        bool                      `json:"hasApiKey"`
+	HasSecretKey     bool                      `json:"hasSecretKey"`
+	CreatedAt        time.Time                 `json:"createdAt"`
+	UpdatedAt        time.Time                 `json:"updatedAt"`
 }
 
 type PublicChannelModelPrice struct {
@@ -541,6 +539,93 @@ func (s *Service) CreateSystemChannel(actor *model.User, req ChannelRequest) (*P
 	return &public, nil
 }
 
+func (s *Service) DuplicateSystemChannel(actor *model.User, id string) (*PublicModelChannel, error) {
+	if err := s.RequireAdmin(actor); err != nil {
+		return nil, err
+	}
+	source, err := s.adminSystemChannel(id)
+	if err != nil {
+		return nil, err
+	}
+	sourceModels, err := s.repo.ChannelModels(source.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(sourceModels) == 0 {
+		for _, name := range channelModelNames(*source) {
+			sourceModels = append(sourceModels, model.ChannelModel{ModelKey: name, ProviderModelKey: name, DisplayName: name, BillingMode: "fixed_request", Enabled: false, PriceVersion: 1})
+		}
+	}
+	channelID, err := s.repo.NextPrefixedID("CHANNEL")
+	if err != nil {
+		return nil, err
+	}
+	channel := *source
+	channel.ID = channelID
+	channel.UserID = actor.ID
+	channel.Scope = model.ChannelScopeSystem
+	channel.Name = duplicateChannelName(source.Name)
+	channel.CreatedAt = time.Time{}
+	channel.UpdatedAt = time.Time{}
+	channel.DeletedAt = gorm.DeletedAt{}
+	if err := s.encryptSystemChannelSecrets(&channel); err != nil {
+		return nil, err
+	}
+
+	channelModels := make([]model.ChannelModel, 0, len(sourceModels))
+	priceTiers := make([]model.ChannelModelPriceTier, 0)
+	for _, sourceModel := range sourceModels {
+		modelID, idErr := s.repo.NextPrefixedID("MODEL")
+		if idErr != nil {
+			return nil, idErr
+		}
+		channelModel := sourceModel
+		channelModel.ID = modelID
+		channelModel.ChannelID = channel.ID
+		channelModel.CreatedAt = time.Time{}
+		channelModel.UpdatedAt = time.Time{}
+		channelModel.DeletedAt = gorm.DeletedAt{}
+		channelModel.PriceTiers = nil
+		channelModels = append(channelModels, channelModel)
+		for _, sourceTier := range sourceModel.PriceTiers {
+			tierID, tierErr := s.repo.NextPrefixedID("PTIER")
+			if tierErr != nil {
+				return nil, tierErr
+			}
+			priceTier := sourceTier
+			priceTier.ID = tierID
+			priceTier.ChannelModelID = channelModel.ID
+			priceTier.Selector = nil
+			priceTier.CreatedAt = time.Time{}
+			priceTier.UpdatedAt = time.Time{}
+			priceTier.DeletedAt = gorm.DeletedAt{}
+			priceTiers = append(priceTiers, priceTier)
+		}
+	}
+	if err := s.repo.CreateDuplicatedSystemChannel(&channel, channelModels, priceTiers); err != nil {
+		return nil, err
+	}
+	s.invalidateRouteCatalog()
+	items, err := s.repo.ChannelModels(channel.ID, true)
+	if err != nil {
+		return nil, err
+	}
+	public := publicChannel(channel, true, items)
+	return &public, nil
+}
+
+func duplicateChannelName(name string) string {
+	const suffix = " - 副本"
+	base := []rune(strings.TrimSpace(name))
+	if len(base) == 0 {
+		base = []rune("系统渠道")
+	}
+	if len(base)+len([]rune(suffix)) > 80 {
+		base = base[:80-len([]rune(suffix))]
+	}
+	return string(base) + suffix
+}
+
 func (s *Service) UpdateSystemChannel(actor *model.User, id string, req ChannelRequest) (*PublicModelChannel, error) {
 	if err := s.RequireAdmin(actor); err != nil {
 		return nil, err
@@ -664,10 +749,18 @@ func (s *Service) LogAPICall(log model.ApiCallLog) error {
 		var nextPollAt *time.Time
 		if stage == "create" && log.Status == model.ApiCallStatusSucceeded && log.ProviderRequestID != "" {
 			stage = "accepted"
-			next := time.Now().Add(2 * time.Second)
+			delay := 2 * time.Second
+			if log.Capability == "video" {
+				delay = defaultVideoPollInterval
+			}
+			next := time.Now().Add(delay)
 			nextPollAt = &next
 		} else if stage == "poll" {
-			next := time.Now().Add(5 * time.Second)
+			delay := 5 * time.Second
+			if log.Capability == "video" {
+				delay = defaultVideoPollInterval
+			}
+			next := time.Now().Add(delay)
 			nextPollAt = &next
 		}
 		if err := s.repo.UpdateTaskProviderState(log.TaskID, log.ProviderRequestID, stage, nextPollAt); err != nil {
@@ -770,21 +863,11 @@ func (s *Service) channelFromRequest(req ChannelRequest, channel model.ModelChan
 	if baseURL == "" {
 		return channel, BadAuthRequest("请填写 Base URL")
 	}
-	requestedAllowLocal := channel.AllowLocalChannel
-	if req.AllowLocalChannel != nil {
-		requestedAllowLocal = *req.AllowLocalChannel
-	}
-	if requestedAllowLocal && !s.DesktopLocalChannelsEnabled() {
-		return channel, BadAuthRequest("当前后端未启用本机渠道")
-	}
-	// 启用/停用或只修改价格、模型等本地配置时，不应要求上游域名当前可解析。
-	// 只有 Base URL 或本机渠道开关实际变化时才做出站地址校验。
+	// 启用/停用或只修改价格、模型等配置时，不应要求上游域名当前可解析。
+	// 只有 Base URL 实际变化时才做出站地址校验。
 	connectionChanged := strings.TrimRight(baseURL, "/") != strings.TrimRight(channel.BaseURL, "/")
-	if req.AllowLocalChannel != nil {
-		connectionChanged = connectionChanged || *req.AllowLocalChannel != channel.AllowLocalChannel
-	}
 	if connectionChanged {
-		if _, err := s.validateChannelOutboundURL(baseURL, requestedAllowLocal, false); err != nil {
+		if _, err := ValidateOutboundURL(baseURL); err != nil {
 			return channel, err
 		}
 	}
@@ -809,7 +892,6 @@ func (s *Service) channelFromRequest(req ChannelRequest, channel model.ModelChan
 		channel.SortOrder = *req.SortOrder
 	}
 	channel.BaseURL = strings.TrimRight(baseURL, "/")
-	channel.AllowLocalChannel = requestedAllowLocal
 	if req.APIKey != "" {
 		channel.APIKey = req.APIKey
 	}
@@ -848,10 +930,6 @@ func mergeChannelRequest(req ChannelRequest, channel model.ModelChannel) Channel
 	}
 	if req.Headers == nil {
 		req.Headers, _ = ParseOutboundHeadersJSON(channel.HeadersJSON)
-	}
-	if req.AllowLocalChannel == nil {
-		value := channel.AllowLocalChannel
-		req.AllowLocalChannel = &value
 	}
 	return req
 }
@@ -896,25 +974,24 @@ func publicChannel(channel model.ModelChannel, admin bool, channelModels []model
 		name, alias = channel.Name, channel.PublicAlias
 	}
 	return PublicModelChannel{
-		ID:                channel.ID,
-		UserID:            channel.UserID,
-		Scope:             channel.Scope,
-		Enabled:           channel.Enabled,
-		Name:              name,
-		PublicAlias:       alias,
-		SortOrder:         channel.SortOrder,
-		BaseURL:           baseURL,
-		AllowLocalChannel: admin && channel.AllowLocalChannel,
-		APIKey:            apiKey,
-		APIFormat:         channel.APIFormat,
-		ConcurrencyLimit:  channel.ConcurrencyLimit,
-		Models:            models,
-		ModelCosts:        modelCosts,
-		Headers:           headers,
-		HasAPIKey:         strings.TrimSpace(channel.APIKey) != "",
-		HasSecretKey:      strings.TrimSpace(channel.SecretKey) != "",
-		CreatedAt:         channel.CreatedAt,
-		UpdatedAt:         channel.UpdatedAt,
+		ID:               channel.ID,
+		UserID:           channel.UserID,
+		Scope:            channel.Scope,
+		Enabled:          channel.Enabled,
+		Name:             name,
+		PublicAlias:      alias,
+		SortOrder:        channel.SortOrder,
+		BaseURL:          baseURL,
+		APIKey:           apiKey,
+		APIFormat:        channel.APIFormat,
+		ConcurrencyLimit: channel.ConcurrencyLimit,
+		Models:           models,
+		ModelCosts:       modelCosts,
+		Headers:          headers,
+		HasAPIKey:        strings.TrimSpace(channel.APIKey) != "",
+		HasSecretKey:     strings.TrimSpace(channel.SecretKey) != "",
+		CreatedAt:        channel.CreatedAt,
+		UpdatedAt:        channel.UpdatedAt,
 	}
 }
 

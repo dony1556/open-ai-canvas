@@ -9,9 +9,8 @@ import { listRegisteredPlugins } from "@/lib/plugins/plugin-registry";
 import "@/lib/plugins/builtin";
 import { EAGLE_PLUGIN_ID } from "@/lib/plugins/builtin/eagle";
 import { PROMPT_OPTIMIZER_PLUGIN_ID } from "@/lib/plugins/builtin/prompt-optimizer";
-import { COMFYUI_PLUGIN_ID, RUNNINGHUB_PLUGIN_ID } from "@/lib/plugins/builtin/workflows";
-import { MEDIA_CONVERSION_PLUGIN_ID } from "@/lib/plugins/builtin/media-conversion";
-import { ART_CRITIQUE_PLUGIN_ID } from "@/lib/art-critique/contracts";
+import { RUNNINGHUB_PLUGIN_ID } from "@/lib/plugins/builtin/workflows";
+import { isOfficialApplicationPluginId } from "@/lib/plugins/official-applications";
 import type { PluginManifest, PluginManifestV2, RegisteredPlugin } from "@/lib/plugins/plugin-types";
 import { getEagleLibrary, type EagleFolder } from "@/services/api/eagle";
 import { fetchPlugins, setUserPluginEnabled, type BackendPlugin, type PluginState } from "@/services/api/plugins";
@@ -142,7 +141,7 @@ export default function PluginsPage() {
         const normalizedSearch = search.trim().toLocaleLowerCase();
         return registeredPlugins.filter((plugin) => {
             const state = pluginStates[plugin.manifest.id];
-            const isApplicationPlugin = backendPluginById.get(plugin.manifest.id)?.management.kind === "application" || isOfficialApplicationPlugin(plugin.manifest.id);
+            const isApplicationPlugin = backendPluginById.get(plugin.manifest.id)?.management.kind === "application" || isOfficialApplicationPluginId(plugin.manifest.id);
             if (user?.role !== "admin" && !features.systemPluginsVisibleToUsers && !isApplicationPlugin) return false;
             const installation = installations.find((item) => item.manifest.id === plugin.manifest.id);
             const enabled = state?.effectiveEnabled ?? Boolean(installation?.enabled);
@@ -186,7 +185,7 @@ export default function PluginsPage() {
     }, [pluginSections, scrollTarget]);
 
     const categoryCounts = useMemo(() => {
-        const visiblePlugins = registeredPlugins.filter((plugin) => user?.role === "admin" || features.systemPluginsVisibleToUsers || isOfficialApplicationPlugin(plugin.manifest.id));
+        const visiblePlugins = registeredPlugins.filter((plugin) => user?.role === "admin" || features.systemPluginsVisibleToUsers || isOfficialApplicationPluginId(plugin.manifest.id));
         const counts: Record<string, number> = { all: visiblePlugins.length, text: 0, image: 0, video: 0, audio: 0, payment: 0, other: 0 };
         for (const plugin of visiblePlugins) {
             for (const section of protocolSectionMeta) {
@@ -203,7 +202,7 @@ export default function PluginsPage() {
     const detailsPlugin = detailsPluginId ? registeredPlugins.find((plugin) => plugin.manifest.id === detailsPluginId) : undefined;
 
     const hasPluginConfiguration = (plugin: RegisteredPlugin) => Boolean(plugin.manifest.configuration?.fields?.length);
-    const canConfigurePlugin = (plugin: RegisteredPlugin) => Boolean(pluginStates[plugin.manifest.id]?.canConfigure) && (hasPluginConfiguration(plugin) || plugin.manifest.id === RUNNINGHUB_PLUGIN_ID || plugin.manifest.id === COMFYUI_PLUGIN_ID);
+    const canConfigurePlugin = (plugin: RegisteredPlugin) => Boolean(pluginStates[plugin.manifest.id]?.canConfigure) && (hasPluginConfiguration(plugin) || plugin.manifest.id === RUNNINGHUB_PLUGIN_ID);
 
     const isPluginEnabled = (plugin: RegisteredPlugin, installation = installations.find((item) => item.manifest.id === plugin.manifest.id)) => pluginStates[plugin.manifest.id]?.effectiveEnabled ?? Boolean(installation?.enabled);
 
@@ -212,7 +211,7 @@ export default function PluginsPage() {
             const next = await setUserPluginEnabled(plugin.manifest.id, enabled);
             setEnabled(plugin.manifest.id, enabled);
             setPluginStates({ ...usePluginStore.getState().pluginStates, [next.pluginId]: next });
-            if (next.pluginId === RUNNINGHUB_PLUGIN_ID || next.pluginId === COMFYUI_PLUGIN_ID) {
+            if (next.pluginId === RUNNINGHUB_PLUGIN_ID) {
                 setRuntimeStatuses({ ...usePluginStore.getState().runtimeStatuses, [next.pluginId]: next.effectiveEnabled ? "enabled" : "disabled" });
             }
             message.success(`${plugin.manifest.name}${enabled ? "已启用" : "已停用"}`);
@@ -572,15 +571,15 @@ export default function PluginsPage() {
                                             <p>在创作页或图片、视频节点的提示词编辑器中使用“优化”按钮，即可让当前文本模型整理提示词。</p>
                                             <p className="mt-2 text-[var(--fs-micro)] text-foreground/50">插件不会自动覆盖原提示词，只有点击“采用”后才会回填到当前输入框。</p>
                                         </div>
-                                    ) : settingsPlugin.manifest.id === RUNNINGHUB_PLUGIN_ID || settingsPlugin.manifest.id === COMFYUI_PLUGIN_ID ? (
+                                    ) : settingsPlugin.manifest.id === RUNNINGHUB_PLUGIN_ID ? (
                                         <div className="plugin-settings-empty">
-                                            <p>{settingsPlugin.manifest.id === RUNNINGHUB_PLUGIN_ID ? "RunningHub 的 API Key、Workflow / App 和字段映射在宿主设置页维护。" : "ComfyUI Bridge 的设备、服务地址和工作流字段在宿主设置页维护。"}</p>
+                                            <p>RunningHub 的 API Key、Workflow / App 和字段映射在宿主设置页维护。</p>
                                             <Button
                                                 type="primary"
                                                 icon={<ExternalLink className="size-4" />}
                                                 onClick={() => {
                                                     setSettingsPluginId(null);
-                                                    navigate(`/settings?section=${settingsPlugin.manifest.id === RUNNINGHUB_PLUGIN_ID ? "runninghub" : "comfyui"}`);
+                                                    navigate("/settings?section=runninghub");
                                                 }}
                                             >
                                                 打开工作流设置
@@ -627,14 +626,10 @@ function toRegisteredPlugin(plugin: BackendPlugin): RegisteredPlugin {
     return { manifest: plugin.manifest, source: plugin.source };
 }
 
-function isOfficialApplicationPlugin(pluginId: string) {
-    return [RUNNINGHUB_PLUGIN_ID, COMFYUI_PLUGIN_ID, EAGLE_PLUGIN_ID, PROMPT_OPTIMIZER_PLUGIN_ID, "portrait-clearance", ART_CRITIQUE_PLUGIN_ID, MEDIA_CONVERSION_PLUGIN_ID].includes(pluginId);
-}
-
 function pluginSourceLabel(plugin: RegisteredPlugin, state?: PluginState) {
     if (plugin.source === "uploaded") return "自定义插件";
     if (plugin.source === "system") return "系统插件";
-    if (state?.canToggle || isOfficialApplicationPlugin(plugin.manifest.id)) return "官方插件";
+    if (state?.canToggle || isOfficialApplicationPluginId(plugin.manifest.id)) return "官方插件";
     return "系统插件";
 }
 

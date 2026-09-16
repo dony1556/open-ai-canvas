@@ -78,6 +78,95 @@ func TestUpdateSystemChannelEnabledOnlySkipsOutboundResolution(t *testing.T) {
 	}
 }
 
+func TestDuplicateSystemChannelCopiesSecretsModelsAndPriceTiers(t *testing.T) {
+	svc, db := newChannelModelTestService(t)
+	svc.dataDir = t.TempDir()
+	admin := &model.User{ID: "admin", Role: model.UserRoleAdmin}
+	source := model.ModelChannel{
+		ID:               "channel-source",
+		UserID:           admin.ID,
+		Scope:            model.ChannelScopeSystem,
+		Enabled:          false,
+		Name:             "方舟视频",
+		PublicAlias:      "视频主链路",
+		BaseURL:          "https://example.com/v1",
+		APIKey:           "source-key",
+		SecretKey:        "source-secret",
+		APIFormat:        "openai",
+		ConcurrencyLimit: 6,
+		ModelsJSON:       `["seedance-2"]`,
+		HeadersJSON:      `[{"name":"X-Tenant","value":"tenant-a"}]`,
+	}
+	if err := svc.encryptSystemChannelSecrets(&source); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	sourceModel := model.ChannelModel{
+		ID:                    "model-source",
+		ChannelID:             source.ID,
+		ModelKey:              "seedance-2",
+		ProviderModelKey:      "seedance-2",
+		DisplayName:           "Seedance 2",
+		SortOrder:             3,
+		Capability:            "video",
+		Protocol:              model.ChannelInterfaceVolcengineArkVideo,
+		BillingMode:           "fixed_request",
+		UnitPriceMicrocredits: 120,
+		PriceConfigured:       true,
+		Enabled:               true,
+		PriceVersion:          4,
+	}
+	if err := db.Create(&sourceModel).Error; err != nil {
+		t.Fatal(err)
+	}
+	sourceTier := model.ChannelModelPriceTier{
+		ID:                    "tier-source",
+		ChannelModelID:        sourceModel.ID,
+		SelectorKey:           `{}`,
+		SelectorJSON:          `{}`,
+		Resolution:            "720p",
+		ProviderModelKey:      "seedance-2",
+		BillingMode:           "fixed_request",
+		UnitPriceMicrocredits: 120,
+		PriceConfigured:       true,
+		Enabled:               true,
+	}
+	if err := db.Create(&sourceTier).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	copied, err := svc.DuplicateSystemChannel(admin, source.ID)
+	if err != nil {
+		t.Fatalf("DuplicateSystemChannel() error = %v", err)
+	}
+	if copied.Name != "方舟视频 - 副本" || copied.PublicAlias != source.PublicAlias || copied.Enabled != source.Enabled {
+		t.Fatalf("copied channel summary = %#v", copied)
+	}
+	var stored model.ModelChannel
+	if err := db.First(&stored, "id = ?", copied.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.decryptSystemChannelSecrets(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.APIKey != "source-key" || stored.SecretKey != "source-secret" || stored.HeadersJSON != source.HeadersJSON {
+		t.Fatalf("copied channel connection = %#v", stored)
+	}
+
+	models, err := svc.repo.ChannelModels(copied.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].ID == sourceModel.ID || models[0].ModelKey != sourceModel.ModelKey || models[0].SortOrder != sourceModel.SortOrder {
+		t.Fatalf("copied models = %#v", models)
+	}
+	if len(models[0].PriceTiers) != 1 || models[0].PriceTiers[0].ID == sourceTier.ID || models[0].PriceTiers[0].UnitPriceMicrocredits != sourceTier.UnitPriceMicrocredits {
+		t.Fatalf("copied price tiers = %#v", models[0].PriceTiers)
+	}
+}
+
 func TestChannelFromRequestStoresAndClearsHeaders(t *testing.T) {
 	request := ChannelRequest{Name: "Headers", BaseURL: "https://example.com/v1", Headers: []OutboundHeader{{Name: "User-Agent", Value: "Custom Agent"}}}
 	channel, err := channelFromRequest(request, model.ModelChannel{})
@@ -135,6 +224,7 @@ func TestRuntimeConcurrencyUsesEnvironmentFallback(t *testing.T) {
 }
 
 func TestFetchAdminChannelModelsReaddsDeletedModel(t *testing.T) {
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"id":"model-a"}]}`))
@@ -142,9 +232,8 @@ func TestFetchAdminChannelModelsReaddsDeletedModel(t *testing.T) {
 	defer upstream.Close()
 
 	svc, db := newChannelModelTestService(t)
-	svc.runtimeCapabilities = RuntimeCapabilities{desktopLocalChannels: true}
 	admin := &model.User{ID: "admin", Role: model.UserRoleAdmin}
-	channel := model.ModelChannel{ID: "channel-1", UserID: admin.ID, Scope: model.ChannelScopeSystem, Enabled: true, Name: "Test", BaseURL: upstream.URL + "/v1", APIKey: "key", APIFormat: "openai", ModelsJSON: `[]`, AllowLocalChannel: true}
+	channel := model.ModelChannel{ID: "channel-1", UserID: admin.ID, Scope: model.ChannelScopeSystem, Enabled: true, Name: "Test", BaseURL: upstream.URL + "/v1", APIKey: "key", APIFormat: "openai", ModelsJSON: `[]`}
 	deleted := model.ChannelModel{ID: "deleted-model", ChannelID: channel.ID, ModelKey: "model-a", DisplayName: "model-a", BillingMode: "fixed_request", PriceVersion: 1}
 	if err := db.Create(&channel).Error; err != nil {
 		t.Fatal(err)
@@ -180,6 +269,7 @@ func TestFetchAdminChannelModelsReaddsDeletedModel(t *testing.T) {
 }
 
 func TestImportAdminChannelModelsOnlyImportsSelectedModels(t *testing.T) {
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"id":"model-a"},{"id":"model-b"}]}`))
@@ -187,9 +277,8 @@ func TestImportAdminChannelModelsOnlyImportsSelectedModels(t *testing.T) {
 	defer upstream.Close()
 
 	svc, db := newChannelModelTestService(t)
-	svc.runtimeCapabilities = RuntimeCapabilities{desktopLocalChannels: true}
 	admin := &model.User{ID: "admin", Role: model.UserRoleAdmin}
-	channel := model.ModelChannel{ID: "channel-1", UserID: admin.ID, Scope: model.ChannelScopeSystem, Enabled: true, Name: "Test", BaseURL: upstream.URL + "/v1", APIKey: "key", APIFormat: "openai", ModelsJSON: `[]`, AllowLocalChannel: true}
+	channel := model.ModelChannel{ID: "channel-1", UserID: admin.ID, Scope: model.ChannelScopeSystem, Enabled: true, Name: "Test", BaseURL: upstream.URL + "/v1", APIKey: "key", APIFormat: "openai", ModelsJSON: `[]`}
 	if err := db.Create(&channel).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +315,7 @@ func TestImportAdminChannelModelsOnlyImportsSelectedModels(t *testing.T) {
 }
 
 func TestImportAdminChannelModelsRejectsUnknownSelection(t *testing.T) {
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"id":"model-a"}]}`))
@@ -233,9 +323,8 @@ func TestImportAdminChannelModelsRejectsUnknownSelection(t *testing.T) {
 	defer upstream.Close()
 
 	svc, db := newChannelModelTestService(t)
-	svc.runtimeCapabilities = RuntimeCapabilities{desktopLocalChannels: true}
 	admin := &model.User{ID: "admin", Role: model.UserRoleAdmin}
-	channel := model.ModelChannel{ID: "channel-1", UserID: admin.ID, Scope: model.ChannelScopeSystem, Enabled: true, Name: "Test", BaseURL: upstream.URL + "/v1", APIKey: "key", APIFormat: "openai", ModelsJSON: `[]`, AllowLocalChannel: true}
+	channel := model.ModelChannel{ID: "channel-1", UserID: admin.ID, Scope: model.ChannelScopeSystem, Enabled: true, Name: "Test", BaseURL: upstream.URL + "/v1", APIKey: "key", APIFormat: "openai", ModelsJSON: `[]`}
 	if err := db.Create(&channel).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -25,22 +25,23 @@ import (
 var sseFrameBoundaryPattern = regexp.MustCompile(`\r?\n\r?\n`)
 
 type canvasGenerationInput struct {
-	Mode            string                 `json:"mode"`
-	Prompt          string                 `json:"prompt"`
-	Config          providerConfig         `json:"config"`
-	ReferenceImages []providerMedia        `json:"referenceImages"`
-	ReferenceVideos []providerMedia        `json:"referenceVideos"`
-	ReferenceAudios []providerMedia        `json:"referenceAudios"`
-	TextHistory     []providerTextMessage  `json:"textHistory"`
-	Mask            *providerMedia         `json:"mask"`
-	Metadata        map[string]interface{} `json:"metadata"`
-	AgentRequests   *agentToolRequests     `json:"agentRequests"`
-	TextOptions     canvasTextOptions      `json:"textOptions"`
-	ImageCapability *ImageCapabilityConfig `json:"-"`
-	StreamText      bool                   `json:"-"` // 分镜请求使用上游 SSE 保活；最终结构仍在流结束后统一校验。
-	MaxOutputTokens int                    `json:"-"`
-	OnTextDelta     func(string)           `json:"-"`
-	VideoCapability *VideoCapabilityConfig `json:"-"`
+	Mode             string                 `json:"mode"`
+	Prompt           string                 `json:"prompt"`
+	Config           providerConfig         `json:"config"`
+	ReferenceImages  []providerMedia        `json:"referenceImages"`
+	ReferenceVideos  []providerMedia        `json:"referenceVideos"`
+	ReferenceAudios  []providerMedia        `json:"referenceAudios"`
+	TextHistory      []providerTextMessage  `json:"textHistory"`
+	Mask             *providerMedia         `json:"mask"`
+	Metadata         map[string]interface{} `json:"metadata"`
+	AgentRequests    *agentToolRequests     `json:"agentRequests"`
+	TextOptions      canvasTextOptions      `json:"textOptions"`
+	ImageCapability  *ImageCapabilityConfig `json:"-"`
+	StreamText       bool                   `json:"-"` // 分镜请求使用上游 SSE 保活；最终结构仍在流结束后统一校验。
+	MaxOutputTokens  int                    `json:"-"`
+	OnTextDelta      func(string)           `json:"-"`
+	OnReasoningDelta func(string)           `json:"-"`
+	VideoCapability  *VideoCapabilityConfig `json:"-"`
 }
 
 type canvasTextOptions struct {
@@ -69,7 +70,6 @@ type providerConfig struct {
 	APIFormat             string                 `json:"apiFormat"`
 	InterfaceType         string                 `json:"interfaceType"`
 	BaseURL               string                 `json:"baseUrl"`
-	AllowLocalChannel     bool                   `json:"allowLocalChannel"`
 	APIKey                string                 `json:"apiKey"`
 	SecretKey             string                 `json:"secretKey"`
 	Headers               []OutboundHeader       `json:"headers"`
@@ -93,14 +93,13 @@ type providerConfig struct {
 	WebappID              string                 `json:"webappId"`
 	WorkflowJSON          map[string]interface{} `json:"workflowJson"`
 	WorkflowFields        []WorkflowField        `json:"workflowFields"`
-	BridgeID              string                 `json:"bridgeId"`
 	RunningHubUseWallet   bool                   `json:"runningHubUseWallet"`
 	RunningHubWalletKey   string                 `json:"runningHubWalletApiKey"`
 	RunningHubUploadKey   string                 `json:"runningHubUploadApiKey"`
 }
 
 const providerHTTPTimeout = 5 * time.Minute
-const videoPollTimeout = 30 * time.Minute
+const videoPollTimeout = time.Hour
 const maxProviderResponseBytes int64 = 64 << 20
 
 type providerMedia struct {
@@ -145,6 +144,19 @@ type providerHTTPError struct {
 	RetryAfter time.Duration
 }
 
+type providerResponseDecodeError struct {
+	Err error
+}
+
+func (e providerResponseDecodeError) Error() string { return e.Err.Error() }
+func (e providerResponseDecodeError) Unwrap() error { return e.Err }
+
+type providerCircuitOpenError struct{}
+
+func (providerCircuitOpenError) Error() string {
+	return "当前渠道连续失败，已暂时熔断，请稍后重试"
+}
+
 type providerStatePendingError struct {
 	TaskID string
 	Cause  error
@@ -157,12 +169,6 @@ func (e providerStatePendingError) Error() string {
 func (e providerStatePendingError) Unwrap() error { return e.Cause }
 
 type providerAnalyticsKey struct{}
-type providerOutboundPolicyKey struct{}
-
-type providerOutboundPolicyContext struct {
-	scheme string
-	host   string
-}
 
 type providerAnalyticsContext struct {
 	Service           *Service
@@ -297,9 +303,9 @@ func providerPayloadErrorCategory(raw string) (string, bool) {
 		return "模型不存在或当前渠道未获得模型权限", true
 	// 推理/思考模式模型通常禁止强制指定工具调用：DeepSeek 思考模式返回
 	// "Thinking mode does not support this tool_choice"，其他 OpenAI 兼容
-	// 供应商措辞类似。归为固定可行动原因，画布智能体据此把首步的
-	// tool_choice=required 降级为 auto 重试一次。排在通用参数类目之前，
-	// 避免这类稳定标识落回笼统的"请检查模型和参数"。
+	// 供应商措辞类似。归为固定可行动原因；显式思考模式会在出站前省略
+	// tool_choice，未声明但由上游隐式开启思考时再按兼容序列重试。排在
+	// 通用参数类目之前，避免稳定标识落回笼统的"请检查模型和参数"。
 	case (strings.Contains(normalized, "thinking") || strings.Contains(normalized, "reasoning")) && strings.Contains(normalized, "tool_choice"),
 		strings.Contains(normalized, "tool_choice") && (strings.Contains(normalized, "not support") || strings.Contains(normalized, "unsupported")):
 		return "当前模型为思考/推理模式，不支持强制工具调用（tool_choice=required），请改用自动工具选择或更换非思考模式模型", true
@@ -346,13 +352,20 @@ func (s *Service) processCanvasGenerationTask(ctx context.Context, userID string
 		return nil, err
 	}
 	input.Config = config
-	ctx = withProviderOutboundPolicy(ctx, input.Config)
 	var textPublisher *taskTextStreamPublisher
 	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") {
-		input.StreamText = input.TextOptions.Stream == nil || *input.TextOptions.Stream
+		requestedStream := input.TextOptions.Stream == nil || *input.TextOptions.Stream
+		supportsStream := input.Config.CapabilityConfig == nil || input.Config.CapabilityConfig.Text == nil || input.Config.CapabilityConfig.Text.Streaming == nil || *input.Config.CapabilityConfig.Text.Streaming
+		input.StreamText = requestedStream && supportsStream
 	}
 	if input.Mode == "text" && strings.HasPrefix(taskType, "canvas_text") && input.StreamText {
 		textPublisher = newTaskTextStreamPublisher(s, userID, taskExecutionID(ctx))
+		if input.AgentRequests != nil {
+			textPublisher = newCloudAgentStreamPublisher(s, userID, taskExecutionID(ctx), "assistant_delta")
+			reasoningPublisher := newCloudAgentStreamPublisher(s, userID, taskExecutionID(ctx), "reasoning_delta")
+			input.OnReasoningDelta = reasoningPublisher.Publish
+			defer reasoningPublisher.Close()
+		}
 		input.OnTextDelta = textPublisher.Publish
 		defer textPublisher.Close()
 	}
@@ -813,11 +826,6 @@ func (s *Service) resolveProviderConfig(config providerConfig) (providerConfig, 
 		return providerConfig{}, err
 	}
 	config.Headers = headers
-	if isComfyBridgeInterface(config.InterfaceType) {
-		config.BaseURL = "bridge://local"
-		config.APIKey = ""
-		return config, nil
-	}
 	if isRunningHubInterface(config.InterfaceType) && strings.TrimSpace(config.BaseURL) == "" {
 		config.BaseURL = "https://www.runninghub.cn"
 	}
@@ -826,10 +834,9 @@ func (s *Service) resolveProviderConfig(config providerConfig) (providerConfig, 
 		channelID = systemChannelIDFromBaseURL(config.BaseURL)
 	}
 	if channelID == "" {
-		if _, err := s.validateChannelOutboundURL(config.BaseURL, config.AllowLocalChannel, false); err != nil {
+		if _, err := ValidateOutboundURL(config.BaseURL); err != nil {
 			return providerConfig{}, err
 		}
-		config.AllowLocalChannel = s.effectiveAllowLocalChannel(config.AllowLocalChannel)
 		return config, nil
 	}
 	channel, err := s.SystemChannel(channelID)
@@ -856,7 +863,7 @@ func (s *Service) resolveProviderConfig(config providerConfig) (providerConfig, 
 			modelKey = models[0]
 		}
 	}
-	if _, err := s.validateChannelOutboundURL(channel.BaseURL, channel.AllowLocalChannel, false); err != nil {
+	if _, err := ValidateOutboundURL(channel.BaseURL); err != nil {
 		return providerConfig{}, err
 	}
 	config.ChannelID = channel.ID
@@ -889,7 +896,6 @@ func (s *Service) resolveProviderConfig(config providerConfig) (providerConfig, 
 	config.InterfaceType = string(channelModel.Protocol)
 	config.APIFormat = channelAPIFormatForProtocol(channel.APIFormat, channelModel.Protocol)
 	config.BaseURL = channel.BaseURL
-	config.AllowLocalChannel = s.effectiveAllowLocalChannel(channel.AllowLocalChannel)
 	config.APIKey = channel.APIKey
 	config.SecretKey = channel.SecretKey
 	config.Headers, err = ParseOutboundHeadersJSON(channel.HeadersJSON)

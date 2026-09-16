@@ -1,5 +1,6 @@
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { canvasNodeVideoPreviewUrl, canvasVideoAssetPreviewUrl } from "@/lib/canvas/canvas-media-preview";
+import { writeCanvasNodePrompt } from "@/lib/canvas/canvas-node-prompt";
 import { getNodeResourceKind } from "@/lib/canvas/node-registry";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import type { Skill } from "@/services/api/skills";
@@ -215,19 +216,6 @@ function canvasReferenceIdentityChanged(previousReferences: CanvasResourceRefere
     return previousReferences.some((reference) => nextLabelByNodeId.get(reference.nodeId) !== reference.label);
 }
 
-export function writeCanvasNodePrompt(node: CanvasNodeData, prompt: string) {
-    const hasExistingContent = (node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim())) || (node.type === CanvasNodeType.Image && Boolean(node.metadata?.content));
-    const promptTemplateMetadata = node.metadata?.promptTemplateOperation
-        ? { promptTemplateOperation: undefined, promptTemplateVariables: undefined }
-        : {};
-    return {
-        ...node,
-        metadata: hasExistingContent
-            ? { ...node.metadata, ...promptTemplateMetadata, composerContent: prompt }
-            : { ...node.metadata, ...promptTemplateMetadata, prompt, composerContent: prompt },
-    };
-}
-
 function removeCanvasMentionToken(value: string, token: string) {
     return replaceCanvasMentionToken(value, token, "");
 }
@@ -308,6 +296,36 @@ export function buildCanvasResourceReferences(nodes: CanvasNodeData[], connectio
     const globalReferences = labelResourceNodes(sourceNodes.filter(isResourceNode), false);
     const activeByNodeId = new Map(labelResourceNodes(contextNodes, true).map((reference) => [reference.nodeId, reference]));
     return globalReferences.map((reference) => activeByNodeId.get(reference.nodeId) || reference);
+}
+
+/** Agent 的 @ 菜单覆盖整个画布，而不是只覆盖可作为生成输入的资源节点。 */
+export function buildCanvasAgentMentionReferences(nodes: CanvasNodeData[]): CanvasResourceReference[] {
+    return nodes.map((node, index) => {
+        const kind = resourceKind(node) || "text";
+        const fallbackTitle = `节点 ${index + 1}`;
+        return {
+            id: node.id,
+            nodeId: node.id,
+            kind,
+            label: node.title?.trim() || fallbackTitle,
+            title: node.title?.trim() || fallbackTitle,
+            previewUrl: node.metadata?.workflowKind === "character"
+                ? node.metadata.characterCoverUrl
+                : node.type === CanvasNodeType.Drawing
+                  ? node.metadata?.drawingPreviewUrl
+                  : node.type === CanvasNodeType.Video
+                    ? canvasNodeVideoPreviewUrl(node)
+                    : node.metadata?.previewContent || node.metadata?.content,
+            storageKey: node.metadata?.storageKey,
+            previewStorageKey: node.type === CanvasNodeType.Video ? node.metadata?.videoPreview?.storageKey : undefined,
+            drawingId: node.type === CanvasNodeType.Drawing ? node.metadata?.drawingId : undefined,
+            drawingRevision: node.type === CanvasNodeType.Drawing ? node.metadata?.drawingRevision : undefined,
+            text: node.metadata?.content || node.metadata?.composerContent || node.metadata?.prompt || node.title,
+            active: true,
+            sourceType: node.type,
+            mentionToken: canvasNodeMentionToken(node.id),
+        };
+    });
 }
 
 function uniqueCanvasNodes(nodes: CanvasNodeData[]) {

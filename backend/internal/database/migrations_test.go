@@ -32,8 +32,37 @@ func TestMigrateSchemaRecordsAndValidatesVersion(t *testing.T) {
 	if !db.Migrator().HasIndex(&model.ProjectAssetCandidate{}, "idx_project_asset_candidates_pending_identity") {
 		t.Fatal("schema migration v3 did not create candidate identity index")
 	}
+	if !db.Migrator().HasTable(&model.AgentProfile{}) || !db.Migrator().HasIndex(&model.AgentProfile{}, "idx_agent_profiles_scope") {
+		t.Fatal("schema migration v15 did not create scoped Agent profiles")
+	}
 	if err := MigrateSchema(db); err != nil {
 		t.Fatalf("migration should be idempotent: %v", err)
+	}
+}
+
+func TestMigrateSchemaV15UpgradesExistingDatabase(t *testing.T) {
+	db, err := Open(Config{Driver: "sqlite", DSN: "file:migration-agent-profiles-v15?mode=memory&cache=shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrator().DropTable(&model.AgentProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", 15).Delete(&schemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateSchema(db); err != nil {
+		t.Fatalf("upgrade from v14: %v", err)
+	}
+	if !db.Migrator().HasTable(&model.AgentProfile{}) || !db.Migrator().HasIndex(&model.AgentProfile{}, "idx_agent_profiles_scope") {
+		t.Fatal("v15 upgrade did not install Agent profile table and scope index")
+	}
+	status, err := ReadSchemaStatus(db)
+	if err != nil || !status.Ready || status.Current != 15 {
+		t.Fatalf("unexpected upgraded schema status: %+v, %v", status, err)
 	}
 }
 
@@ -59,6 +88,22 @@ func TestMigrateSchemaV8AllowsReusingArchivedLogicalModelCode(t *testing.T) {
 	}
 	if err := db.Exec(`INSERT INTO logical_models(id, code, archived_at) VALUES ('duplicate', 'gpt-image-2', NULL)`).Error; err == nil {
 		t.Fatal("active logical model code must remain unique")
+	}
+}
+
+func TestMigrateSchemaV12AddsAgentTokenChargeLimit(t *testing.T) {
+	db, err := Open(Config{Driver: "sqlite", DSN: "file:migration-agent-token-charge-limit?mode=memory&cache=shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TABLE billing_orders (id text PRIMARY KEY)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateSchemaV12(db); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasColumn(&model.BillingOrder{}, "ChargeLimitMicrocredits") {
+		t.Fatal("migration v12 did not add Agent token charge limit")
 	}
 }
 
@@ -255,5 +300,23 @@ func TestRequireSchemaVersionRejectsUninitializedDatabase(t *testing.T) {
 	}
 	if err := RequireSchemaVersion(db); err == nil || !strings.Contains(err.Error(), "请先执行 migrate-schema up") {
 		t.Fatalf("expected missing migration error, got %v", err)
+	}
+}
+
+func TestMigrateSchemaV13AddsCloudAgentCanvasMutation(t *testing.T) {
+	db, err := Open(Config{Driver: "sqlite", DSN: "file:migration-cloud-agent-canvas-mutation?mode=memory&cache=shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasTable(&model.CloudAgentCanvasMutation{}) {
+		t.Fatal("migration v13 did not create cloud agent canvas mutation table")
+	}
+	for _, field := range []string{"RunID", "BeforeSnapshotHash", "AfterSnapshotHash", "BeforeJSON", "HasSubmittedTask", "Status"} {
+		if !db.Migrator().HasColumn(&model.CloudAgentCanvasMutation{}, field) {
+			t.Fatalf("migration v13 did not add %s", field)
+		}
 	}
 }

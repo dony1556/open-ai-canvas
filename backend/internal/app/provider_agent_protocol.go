@@ -11,10 +11,11 @@ import (
 // The browser sends one protocol-neutral conversation. Only the selected
 // provider body is materialized; declarative plugins retain their request paths.
 type canonicalAgentRequest struct {
-	Messages     []map[string]interface{} `json:"messages"`
-	Tools        []map[string]interface{} `json:"tools"`
-	ToolChoice   interface{}              `json:"toolChoice"`
-	SystemPrompt string                   `json:"systemPrompt"`
+	Messages       []map[string]interface{} `json:"messages"`
+	Tools          []map[string]interface{} `json:"tools"`
+	ToolChoice     interface{}              `json:"toolChoice"`
+	SystemPrompt   string                   `json:"systemPrompt"`
+	PromptCacheKey string                   `json:"promptCacheKey,omitempty"`
 }
 
 func expandCanonicalAgentRequest(source *canonicalAgentRequest, config providerConfig, declarative bool) (*agentToolRequests, error) {
@@ -129,6 +130,15 @@ func canonicalAgentChatBody(source *canonicalAgentRequest, claude bool) map[stri
 			continue
 		}
 		converted := map[string]interface{}{"role": message["role"], "content": canonicalAgentContent(message["content"], format)}
+		if calls := canonicalAgentToolCalls(message["tool_calls"]); len(calls) > 0 {
+			// Runtime calls are protocol-neutral; materialize the wire discriminator here.
+			wireCalls := make([]interface{}, 0, len(calls))
+			for _, call := range calls {
+				call["type"] = "function"
+				wireCalls = append(wireCalls, call)
+			}
+			converted["tool_calls"] = wireCalls
+		}
 		if claude && stringField(message, "role") == "system" {
 			converted["content"] = canonicalAgentText(message["content"])
 		}
@@ -146,7 +156,11 @@ func canonicalAgentChatBody(source *canonicalAgentRequest, claude bool) map[stri
 	if named, ok := choice.(map[string]interface{}); ok {
 		choice = map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": named["name"]}}
 	}
-	return map[string]interface{}{"messages": messages, "tools": tools, "tool_choice": choice, "parallel_tool_calls": false}
+	body := map[string]interface{}{"messages": messages, "tools": tools, "tool_choice": choice, "parallel_tool_calls": false}
+	if !claude && source.PromptCacheKey != "" {
+		body["prompt_cache_key"] = source.PromptCacheKey
+	}
+	return body
 }
 
 func canonicalAgentResponsesBody(source *canonicalAgentRequest) map[string]interface{} {
@@ -161,6 +175,10 @@ func canonicalAgentResponsesBody(source *canonicalAgentRequest) map[string]inter
 			messages = append(messages, map[string]interface{}{"type": "function_call_output", "call_id": message["tool_call_id"], "output": message["content"]})
 		default:
 			messages = append(messages, map[string]interface{}{"role": message["role"], "content": canonicalAgentContent(message["content"], "responses")})
+			for _, call := range canonicalAgentToolCalls(message["tool_calls"]) {
+				function, _ := call["function"].(map[string]interface{})
+				messages = append(messages, map[string]interface{}{"type": "function_call", "call_id": call["id"], "name": function["name"], "arguments": function["arguments"]})
+			}
 		}
 	}
 	tools := make([]interface{}, 0, len(source.Tools))
@@ -170,7 +188,11 @@ func canonicalAgentResponsesBody(source *canonicalAgentRequest) map[string]inter
 		converted["type"] = "function"
 		tools = append(tools, converted)
 	}
-	return map[string]interface{}{"input": messages, "tools": tools, "tool_choice": source.ToolChoice, "parallel_tool_calls": false}
+	body := map[string]interface{}{"input": messages, "tools": tools, "tool_choice": source.ToolChoice, "parallel_tool_calls": false}
+	if source.PromptCacheKey != "" {
+		body["prompt_cache_key"] = source.PromptCacheKey
+	}
+	return body
 }
 
 func canonicalAgentGeminiBody(source *canonicalAgentRequest) map[string]interface{} {
@@ -361,6 +383,18 @@ func canonicalAgentJSONValue(value interface{}) interface{} {
 		}
 	}
 	return value
+}
+
+func canonicalAgentToolCalls(value interface{}) []map[string]interface{} {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var calls []map[string]interface{}
+	if json.Unmarshal(raw, &calls) != nil {
+		return nil
+	}
+	return calls
 }
 
 func canonicalAgentJSONObject(value interface{}) map[string]interface{} {

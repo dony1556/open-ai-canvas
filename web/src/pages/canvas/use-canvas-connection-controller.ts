@@ -6,6 +6,7 @@ import { latchCanvasConnectionApproach, type CanvasConnectionApproach } from "@/
 import type { PendingConnectionCreate } from "@/components/canvas/canvas-workspace-overlays";
 import { getNodeSpec } from "@/constant/canvas";
 import { batchSourceRestriction, buildBatchConnectionCreateRequest, hasBatchConnectionCandidate, planBatchConnections, type CanvasBatchConnectionPreview } from "@/lib/canvas/canvas-batch-connection";
+import { batchReferenceHandleAtY } from "@/lib/canvas/canvas-batch-table";
 import { connectedNodeCenterFromEdgeDrop } from "@/lib/canvas/canvas-connected-node-placement";
 import { canvasConnectionError } from "@/lib/canvas/canvas-connection-policy";
 import { attachNodeToStoryboardRow, createCanvasNode, getConnectionTargetAnchor, isHiddenBatchChild, normalizeConnection, storyboardHandleAtY, storyboardPromptTemplateMetadata, storyboardRowFromHandle } from "@/lib/canvas/canvas-project-domain";
@@ -65,12 +66,6 @@ function selectRunningHubWorkflow(config: AiConfig) {
         && (item.kind === "app" ? "app" : "workflow") === config.runningHub.selectedKind)
         || config.runningHub.workflows.find((item) => normalizeRunningHubCapability(item.capability, capability) === capability)
         || config.runningHub.workflows[0];
-}
-
-function selectComfyBridgeWorkflow(config: AiConfig) {
-    return config.comfyBridge.workflows.find((item) => item.workflowId.trim() === config.comfyBridge.workflowId.trim())
-        || config.comfyBridge.workflows.find((item) => item.capability === config.comfyBridge.capability)
-        || config.comfyBridge.workflows[0];
 }
 
 export function useCanvasConnectionController({
@@ -233,7 +228,7 @@ export function useCanvasConnectionController({
         setContextMenu(null);
     }, [config, connectionsRef, message, nodesRef, setConnections, setContextMenu, setNodes]);
 
-    const createConnectedNode = useCallback(async (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, pending: PendingConnectionCreate, workflowProvider?: "runninghub" | "comfyui") => {
+    const createConnectedNode = useCallback(async (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.BatchTable | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, pending: PendingConnectionCreate, workflowProvider?: "runninghub") => {
         const nodeType = type;
         if (nodeType === CanvasNodeType.Drawing && !isDrawingEngineAvailable(defaultDrawingEngine, tldrawLicenseKey)) {
             message.error("当前生产构建未配置 tldraw License Key，不能创建 tldraw 绘图");
@@ -257,19 +252,16 @@ export function useCanvasConnectionController({
             ? batchSourceNodeIds.length ? batchScriptPrompt : sourceNode?.type === CanvasNodeType.Text ? (sourceNode.metadata?.content || sourceNode.metadata?.prompt || "").trim() : ""
             : "";
         const selectedWorkflowProvider = nodeType === CanvasNodeType.Config
-            ? workflowProvider || (workflowProviderPluginEnabled(runtimeStatuses, "runninghub") ? "runninghub" : workflowProviderPluginEnabled(runtimeStatuses, "comfyui") ? "comfyui" : undefined)
+            ? workflowProvider || (workflowProviderPluginEnabled(runtimeStatuses, "runninghub") ? "runninghub" : undefined)
             : undefined;
         if (selectedWorkflowProvider && !workflowProviderPluginEnabled(runtimeStatuses, selectedWorkflowProvider)) {
-            message.error(`${selectedWorkflowProvider === "runninghub" ? "RunningHub" : "ComfyUI"} 工作流插件未启用`);
+            message.error("RunningHub 工作流插件未启用");
             closeConnectionCreateMenu();
             setConnecting(null);
             return;
         }
         const runningHubWorkflow = selectedWorkflowProvider === "runninghub" ? selectRunningHubWorkflow(config) : undefined;
-        const comfyBridgeWorkflow = selectedWorkflowProvider === "comfyui" ? selectComfyBridgeWorkflow(config) : undefined;
-        const workflowCapability = selectedWorkflowProvider === "runninghub"
-            ? normalizeRunningHubCapability(runningHubWorkflow?.capability, normalizeRunningHubCapability(config.runningHub.capability))
-            : comfyBridgeWorkflow?.capability || "image";
+        const workflowCapability = normalizeRunningHubCapability(runningHubWorkflow?.capability, normalizeRunningHubCapability(config.runningHub.capability));
         const metadata: CanvasNodeMetadata | undefined = nodeType === CanvasNodeType.Config
             ? {
                 generationMode: selectedWorkflowProvider ? workflowCapability === "video" ? "video" as const : workflowCapability === "audio" ? "audio" as const : "image" as const : "image" as const,
@@ -278,9 +270,6 @@ export function useCanvasConnectionController({
                 ...(selectedWorkflowProvider === "runninghub" ? {
                     workflowTitle: "RunningHub 工作流",
                     ...(runningHubWorkflow ? { runningHubWorkflowId: runningHubWorkflow.workflowId, runningHubWorkflowKind: runningHubWorkflow.kind === "app" ? "app" as const : "workflow" as const } : {}),
-                } : selectedWorkflowProvider === "comfyui" ? {
-                    workflowTitle: "ComfyUI Bridge",
-                    ...(comfyBridgeWorkflow ? { comfyBridgeWorkflowId: comfyBridgeWorkflow.workflowId } : {}),
                 } : {})
               }
             : nodeType === CanvasNodeType.Drawing
@@ -304,16 +293,10 @@ export function useCanvasConnectionController({
               ? pending.position
               : connectedNodeCenterFromEdgeDrop(pending.position, spec, pending.connection.handleType);
         const newNode = createCanvasNode(nodeType, position, metadata);
-        if (nodeType === CanvasNodeType.Config && selectedWorkflowProvider) newNode.title = selectedWorkflowProvider === "runninghub" ? "RunningHub 工作流" : "ComfyUI Bridge";
+        if (nodeType === CanvasNodeType.Config && selectedWorkflowProvider) newNode.title = "RunningHub 工作流";
         if (storyboardRow) newNode.title = `镜头 ${storyboardRow.shotNumber} · 视频`;
         if (batchSourceNodeIds.length && nodeType === CanvasNodeType.Drawing) {
             message.error("批量连接暂不支持创建绘图，请先连接到普通节点");
-            closeConnectionCreateMenu();
-            setConnecting(null);
-            return;
-        }
-        if (batchSourceNodeIds.length && nodeType === CanvasNodeType.MediaConversion) {
-            message.error("转换节点一次只能连接一个输入，请先连接到普通节点");
             closeConnectionCreateMenu();
             setConnecting(null);
             return;
@@ -337,7 +320,7 @@ export function useCanvasConnectionController({
             setConnections(nextConnections);
             setSelectedNodeIds(new Set([newNode.id]));
             setSelectedConnectionId(null);
-            if (nodeType !== CanvasNodeType.Text && nodeType !== CanvasNodeType.Script && nodeType !== CanvasNodeType.Audio && nodeType !== CanvasNodeType.MediaConversion) setDialogNodeId(newNode.id);
+            if (nodeType !== CanvasNodeType.Text && nodeType !== CanvasNodeType.Script && nodeType !== CanvasNodeType.BatchTable && nodeType !== CanvasNodeType.Audio && nodeType !== CanvasNodeType.MediaConversion) setDialogNodeId(newNode.id);
             const skippedCount = batchPlan.skipped.length;
             const duplicateCount = batchPlan.duplicates.length;
             const suffix = skippedCount || duplicateCount ? `，跳过 ${skippedCount + duplicateCount} 个` : "";
@@ -403,18 +386,17 @@ export function useCanvasConnectionController({
         setSelectedNodeIds(new Set([newNode.id]));
         setSelectedConnectionId(null);
         if (nodeType === CanvasNodeType.Drawing) setDrawingNodeId(newNode.id);
-        else if (nodeType !== CanvasNodeType.Text && nodeType !== CanvasNodeType.Script && nodeType !== CanvasNodeType.Audio && nodeType !== CanvasNodeType.MediaConversion) setDialogNodeId(newNode.id);
+        else if (nodeType !== CanvasNodeType.Text && nodeType !== CanvasNodeType.Script && nodeType !== CanvasNodeType.BatchTable && nodeType !== CanvasNodeType.Audio && nodeType !== CanvasNodeType.MediaConversion) setDialogNodeId(newNode.id);
         closeConnectionCreateMenu();
         setConnecting(null);
     }, [closeConnectionCreateMenu, config, connectionsRef, defaultDrawingEngine, message, nodesRef, projectId, runtimeStatuses, setConnecting, setConnections, setDialogNodeId, setDrawingNodeId, setNodes, setSelectedConnectionId, setSelectedNodeIds, tldrawLicenseKey]);
 
-    const getConnectionCreateDisabledReason = useCallback((type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, pending: PendingConnectionCreate, workflowProvider?: "runninghub" | "comfyui") => {
+    const getConnectionCreateDisabledReason = useCallback((type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Script | CanvasNodeType.BatchTable | CanvasNodeType.Video | CanvasNodeType.Audio | CanvasNodeType.Drawing | CanvasNodeType.Config | CanvasNodeType.MediaConversion, pending: PendingConnectionCreate, workflowProvider?: "runninghub") => {
         const nodeType = type;
         if (nodeType === CanvasNodeType.Config) {
-            if (workflowProvider && !workflowProviderPluginEnabled(runtimeStatuses, workflowProvider)) return `${workflowProvider === "runninghub" ? "RunningHub" : "ComfyUI"} 工作流插件未启用`;
+            if (workflowProvider && !workflowProviderPluginEnabled(runtimeStatuses, workflowProvider)) return "RunningHub 工作流插件未启用";
         }
         if (pending.batchSourceNodeIds?.length) {
-            if (nodeType === CanvasNodeType.MediaConversion) return "转换节点一次只能连接一个输入";
             if (nodeType === CanvasNodeType.Drawing || nodeType === CanvasNodeType.Config) return "批量连接暂不支持此节点类型";
             const pendingNode: CanvasNodeData = { id: "__pending-connection-node__", type: nodeType, title: "", position: pending.position, width: getNodeSpec(nodeType).width, height: getNodeSpec(nodeType).height };
             const plan = planBatchConnections({ sourceNodeIds: pending.batchSourceNodeIds, targetNodeId: pendingNode.id, nodes: [...nodesRef.current, pendingNode], connections: connectionsRef.current, config, allowCapacityOverflow: true });
@@ -443,8 +425,8 @@ export function useCanvasConnectionController({
             .reverse()
             .forEach((node) => {
                 const scrollTop = scriptScrollTopById[node.id] || 0;
-                const targetHandleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : undefined;
-                if (node.type === CanvasNodeType.Script && !targetHandleId) return;
+                const targetHandleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : node.type === CanvasNodeType.BatchTable ? batchReferenceHandleAtY(node, world.y, handleRadius) : undefined;
+                if ((node.type === CanvasNodeType.Script || node.type === CanvasNodeType.BatchTable) && !targetHandleId) return;
                 // Ordinary nodes expose one centered input/output port. Only
                 // storyboard rows have a meaningful vertical target position.
                 const targetAnchorRatio = undefined;
@@ -490,8 +472,8 @@ export function useCanvasConnectionController({
             .reverse()
             .forEach((node) => {
                 const scrollTop = scriptScrollTopById[node.id] || 0;
-                const targetHandleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : undefined;
-                if (node.type === CanvasNodeType.Script && !targetHandleId) return;
+                const targetHandleId = node.type === CanvasNodeType.Script ? storyboardHandleAtY(node, world.y, scrollTop) : node.type === CanvasNodeType.BatchTable ? batchReferenceHandleAtY(node, world.y, handleRadius) : undefined;
+                if ((node.type === CanvasNodeType.Script || node.type === CanvasNodeType.BatchTable) && !targetHandleId) return;
                 const targetAnchorRatio = undefined;
                 const anchor = getConnectionTargetAnchor(node, current, targetHandleId, scrollTop);
                 const dx = world.x - anchor.x;
@@ -663,12 +645,21 @@ export function useCanvasConnectionController({
         // reset, an old quick-create menu can coexist with the new draft line;
         // pointerup then sees the stale pending menu and silently aborts.
         if (pendingConnectionCreateRef.current) closeConnectionCreateMenu();
-        if (connectingParamsRef.current) setConnecting(null);
         if (batchConnectionPreviewRef.current && handleType === "target") {
             commitBatchConnection(batchConnectionPreviewRef.current.sourceNodeIds, nodeId, handleId, anchorRatio);
             clearBatchConnection();
             return;
         }
+        // A batch table exposes real target pins inside its content. When a normal
+        // image output is dragged onto one, commit that active connection instead
+        // of starting a new connection session from the target pin.
+        const activeConnection = connectingParamsRef.current;
+        if (activeConnection && handleType === "target" && activeConnection.nodeId !== nodeId) {
+            connectNodes(activeConnection, nodeId, handleId, anchorRatio);
+            setConnecting(null);
+            return;
+        }
+        if (activeConnection) setConnecting(null);
         if (batchConnectionPreviewRef.current) clearBatchConnection();
         connectingPointerIdRef.current = event.pointerId;
         connectingPointerStartRef.current = { x: event.clientX, y: event.clientY };
@@ -677,7 +668,21 @@ export function useCanvasConnectionController({
         setConnectionTargetNodeId(null);
         setConnectionTargetAnchorRatio(undefined);
         setSelectedConnectionId(null);
-    }, [clearBatchConnection, closeConnectionCreateMenu, commitBatchConnection, screenToCanvas, setConnecting, setSelectedConnectionId]);
+    }, [clearBatchConnection, closeConnectionCreateMenu, commitBatchConnection, connectNodes, screenToCanvas, setConnecting, setSelectedConnectionId]);
+
+    const handleConnectDrop = useCallback((event: ReactPointerEvent, nodeId: string, handleId?: string) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (batchConnectionPreviewRef.current) {
+            commitBatchConnection(batchConnectionPreviewRef.current.sourceNodeIds, nodeId, handleId);
+            clearBatchConnection();
+            return;
+        }
+        const current = connectingParamsRef.current;
+        if (!current || current.nodeId === nodeId) return;
+        connectNodes(current, nodeId, handleId);
+        setConnecting(null);
+    }, [clearBatchConnection, commitBatchConnection, connectNodes, setConnecting]);
 
     useEffect(() => {
         const cancelPendingPointerMove = () => {
@@ -816,6 +821,7 @@ export function useCanvasConnectionController({
         createConnectedNode,
         getConnectionCreateDisabledReason,
         handleConnectStart,
+        handleConnectDrop,
         handleBatchConnectionTargetClick,
         batchConnectionPreview,
         beginBatchConnectionMode,

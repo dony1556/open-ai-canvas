@@ -84,6 +84,25 @@ func (r *Repository) ChannelModels(channelID string, includeDisabled bool) ([]mo
 	return items, r.attachChannelModelPriceTiers(pointers)
 }
 
+func (r *Repository) CreateDuplicatedSystemChannel(channel *model.ModelChannel, channelModels []model.ChannelModel, priceTiers []model.ChannelModelPriceTier) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(channel).Error; err != nil {
+			return err
+		}
+		if len(channelModels) > 0 {
+			if err := tx.Create(&channelModels).Error; err != nil {
+				return err
+			}
+		}
+		if len(priceTiers) > 0 {
+			if err := tx.Create(&priceTiers).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (r *Repository) ChannelModelByID(channelID string, id string) (*model.ChannelModel, error) {
 	var item model.ChannelModel
 	if err := r.db.First(&item, "id = ? AND channel_id = ?", id, channelID).Error; err != nil {
@@ -713,6 +732,10 @@ func (r *Repository) SettleBillingOrder(id string, providerRequestID string) err
 			if err != nil {
 				return err
 			}
+			chargeCapped := order.ChargeLimitMicrocredits > 0 && actual > order.ChargeLimitMicrocredits
+			if chargeCapped {
+				actual = order.ChargeLimitMicrocredits
+			}
 			observedActual = actual
 			observedActualAvailable = true
 			refund := max(reserved-actual, int64(0))
@@ -746,7 +769,9 @@ func (r *Repository) SettleBillingOrder(id string, providerRequestID string) err
 				return err
 			}
 			consumeNote := ""
-			if supplement > 0 {
+			if chargeCapped {
+				consumeNote = "Token 实际用量超过 Agent 报价，已按本轮硬上限结算"
+			} else if supplement > 0 {
 				consumeNote = "Token 实际用量超过预授权，已补扣差额"
 			}
 			if err := tx.Create(&model.CreditLedgerEntry{ID: newRepositoryID(), UserID: order.UserID, Type: model.CreditLedgerConsume,

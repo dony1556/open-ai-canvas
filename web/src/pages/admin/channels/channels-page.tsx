@@ -1,18 +1,16 @@
 import { App, Button, Form, Input, InputNumber, Modal, Select, Switch } from "antd";
 import type { FormInstance } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Pencil, Plus, Power, Search, Trash2 } from "lucide-react";
+import { Copy, Pencil, Plus, Power, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 
 import { ChannelHeadersEditor, validateChannelHeaders } from "@/components/channel-headers-editor";
 import { PaginationBar } from "@/components/layout/workspace-page";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { desktopLocalChannelFormState, desktopLocalChannelPayloadValue, DESKTOP_LOCAL_CHANNEL_EXAMPLE_BASE_URL } from "@/lib/desktop-local-channel";
 import { refreshSystemChannels } from "@/lib/user-session";
-import { createAdminChannel, deleteAdminChannel, listAdminChannels, updateAdminChannel } from "@/services/api/auth";
+import { createAdminChannel, deleteAdminChannel, duplicateAdminChannel, listAdminChannels, updateAdminChannel } from "@/services/api/auth";
 import { type ChannelHeader, type ModelChannel } from "@/stores/use-config-store";
-import { useUserStore } from "@/stores/use-user-store";
 import { useAdminContext } from "../admin-context";
 import { AdminPageFrame } from "../components/admin-shell";
 import { AdminDataTable, AdminRowActions, AdminStatusBadge, AdminTableEmpty, configuredSecretText } from "../components/admin-ui";
@@ -23,7 +21,6 @@ type ChannelFormValues = {
     name: string;
     publicAlias?: string;
     baseUrl: string;
-    allowLocalChannel?: boolean;
     apiKey?: string;
     secretKey?: string;
     headers?: ChannelHeader[];
@@ -32,37 +29,11 @@ type ChannelFormValues = {
     enabled?: boolean;
 };
 
-export function adminLocalChannelFormOwner(desktopLocalChannelsEnabled: boolean, hostname: string, requestedAllowLocalChannel?: boolean) {
-    const state = desktopLocalChannelFormState(desktopLocalChannelsEnabled, hostname, requestedAllowLocalChannel);
-    return { ...state, payloadValue: desktopLocalChannelPayloadValue(desktopLocalChannelsEnabled, hostname, requestedAllowLocalChannel) };
-}
-
-export function AdminLocalChannelSwitch({ visible, checked, onChange }: { visible: boolean; checked: boolean; onChange: (checked: boolean) => void }) {
-    if (!visible) return null;
-    return (
-        <Form.Item name="allowLocalChannel" label="允许本机渠道" valuePropName="checked" extra={`仅放行精确 localhost 或 127.0.0.1；示例：${DESKTOP_LOCAL_CHANNEL_EXAMPLE_BASE_URL}`}>
-            <Switch checked={checked} onChange={onChange} />
-        </Form.Item>
-    );
-}
-
-export function AdminLocalChannelFields({ visible, checked, form }: { visible: boolean; checked: boolean; form: Pick<FormInstance<ChannelFormValues>, "setFieldValue"> }) {
-    return (
-        <>
-            <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请填写 Base URL" }]}>
-                <Input placeholder={checked ? DESKTOP_LOCAL_CHANNEL_EXAMPLE_BASE_URL : "填写渠道 Base URL"} />
-            </Form.Item>
-            <AdminLocalChannelSwitch visible={visible} checked={checked} onChange={(value) => form.setFieldValue("allowLocalChannel", value)} />
-        </>
-    );
-}
-
-export function adminChannelSavePayload(values: ChannelFormValues, desktopLocalChannelsEnabled: boolean, hostname: string) {
+export function adminChannelSavePayload(values: ChannelFormValues) {
     return {
         name: values.name.trim(),
         publicAlias: values.publicAlias?.trim() || "",
         baseUrl: values.baseUrl.trim(),
-        allowLocalChannel: adminLocalChannelFormOwner(desktopLocalChannelsEnabled, hostname, values.allowLocalChannel).payloadValue,
         apiKey: values.apiKey?.trim() || "",
         secretKey: values.secretKey?.trim() || "",
         headers: values.headers || [],
@@ -87,16 +58,11 @@ export default function ChannelsPage() {
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [editingChannel, setEditingChannel] = useState<ModelChannel | null>(null);
     const [saving, setSaving] = useState(false);
+    const [duplicatingChannelId, setDuplicatingChannelId] = useState<string | null>(null);
     const [managingChannel, setManagingChannel] = useState<ModelChannel | null>(null);
     const requestSequence = useRef(0);
     const [form] = Form.useForm<ChannelFormValues>();
     const useGlobalConcurrency = Form.useWatch("useGlobalConcurrency", form) !== false;
-    const requestedAllowLocalChannel = Form.useWatch("allowLocalChannel", form) === true;
-    const desktopLocalChannelsEnabled = useUserStore((state) => state.features.desktopLocalChannelsEnabled);
-    const desktopLocalChannelHostname = typeof window === "undefined" ? "" : window.location.hostname;
-    const desktopLocalChannelControl = adminLocalChannelFormOwner(desktopLocalChannelsEnabled, desktopLocalChannelHostname, requestedAllowLocalChannel);
-    const allowLocalChannel = desktopLocalChannelControl.checked;
-    const showDesktopLocalChannelControl = desktopLocalChannelControl.visible;
     const hasFilters = Boolean(keyword || status !== "all");
 
     const updateUrl = (patch: Record<string, string | number>, replace = false) => {
@@ -146,7 +112,6 @@ export default function ChannelsPage() {
                 ? {
                       name: channel.name,
                       baseUrl: channel.baseUrl,
-                      allowLocalChannel: adminLocalChannelFormOwner(desktopLocalChannelsEnabled, desktopLocalChannelHostname, channel.allowLocalChannel).checked,
                       apiKey: "",
                       secretKey: "",
                       headers: channel.headers || [],
@@ -154,7 +119,7 @@ export default function ChannelsPage() {
                       concurrencyLimit: channel.concurrencyLimit || undefined,
                       enabled: channel.enabled !== false,
                   }
-                : { name: "", baseUrl: "", allowLocalChannel: false, apiKey: "", secretKey: "", headers: [], useGlobalConcurrency: true, concurrencyLimit: undefined, enabled: true },
+                : { name: "", baseUrl: "", apiKey: "", secretKey: "", headers: [], useGlobalConcurrency: true, concurrencyLimit: undefined, enabled: true },
         );
         setDrawerOpen(true);
         form.setFieldsValue({ publicAlias: channel?.publicAlias || "" });
@@ -182,7 +147,7 @@ export default function ChannelsPage() {
         }
         setSaving(true);
         try {
-            const payload = adminChannelSavePayload(values, desktopLocalChannelsEnabled, desktopLocalChannelHostname);
+            const payload = adminChannelSavePayload(values);
             await (editingChannel ? updateAdminChannel(editingChannel.id, payload) : createAdminChannel(payload));
             await syncChannels();
             setDrawerOpen(false);
@@ -204,6 +169,20 @@ export default function ChannelsPage() {
             message.success(channel.enabled === false ? "系统渠道已启用" : "系统渠道已停用");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "更新系统渠道失败");
+        }
+    };
+
+    const duplicateChannel = async (channel: ModelChannel) => {
+        setDuplicatingChannelId(channel.id);
+        try {
+            await duplicateAdminChannel(channel.id);
+            await syncChannels();
+            await reload();
+            message.success("系统渠道已复制");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "复制系统渠道失败");
+        } finally {
+            setDuplicatingChannelId(null);
         }
     };
 
@@ -243,6 +222,7 @@ export default function ChannelsPage() {
                     primary={{ label: "模型管理", onClick: () => setManagingChannel(channel) }}
                     actions={[
                         { key: "edit", label: "编辑", icon: <Pencil className="size-3.5" />, onClick: () => openDrawer(channel) },
+                        { key: "duplicate", label: "复制渠道", icon: <Copy className="size-3.5" />, disabled: Boolean(duplicatingChannelId), onClick: () => duplicateChannel(channel) },
                         {
                             key: "toggle",
                             label: channel.enabled !== false ? "停用渠道" : "启用渠道",
@@ -382,7 +362,9 @@ export default function ChannelsPage() {
                     <Form.Item name="publicAlias" label="前台显示别名" extra="留空时显示渠道名称；填写后用户端只显示此别名，后台仍保留原渠道名称。" rules={[{ max: 80, message: "别名不能超过 80 个字符" }]}>
                         <Input maxLength={80} placeholder="可选，例如：精选图片" />
                     </Form.Item>
-                    <AdminLocalChannelFields visible={showDesktopLocalChannelControl} checked={allowLocalChannel} form={form} />
+                    <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true, message: "请填写 Base URL" }]}>
+                        <Input placeholder="填写云端渠道 Base URL" />
+                    </Form.Item>
                     <Form.Item
                         name="apiKey"
                         label={editingChannel ? `API Key / Access Key（${configuredSecretText}）` : "API Key / Access Key"}
