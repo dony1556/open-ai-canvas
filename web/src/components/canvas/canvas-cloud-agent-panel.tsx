@@ -1,38 +1,43 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { Button, Dropdown, Input } from "antd";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ArrowLeft, Bot, Check, ChevronRight, CircleDot, Clock3, Download, History, LoaderCircle, MessageSquarePlus, Settings2, ShieldCheck, Trash2, Sparkles, X } from "lucide-react";
 import { saveAs } from "file-saver";
 import { buildAgentDebugExport } from "@/lib/canvas/agent-debug-export";
-import { markdownPlainText } from "@/lib/markdown-plain-text";
+import { agentPlanVisible, latestAgentPlanItems, pendingAgentQuestion } from "@/lib/canvas/cloud-agent-plan";
 import { nanoid } from "nanoid";
 
 import { ModelPicker } from "@/components/model-picker";
+import { FluidOrb } from "@/components/ui/fluid-orb";
+import { cn } from "@/lib/utils";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { agentErrorPresentation, agentSubmissionErrorTitle } from "@/lib/canvas/agent-error-presentation";
-import { cancelAgentRun, getAgentCapabilities, getAgentProfile, getAgentRun, createAgentRun, decideAgentApproval, sendAgentMessage, subscribeAgentEvents, updateAgentProfile, type AgentEvent, type AgentPermissionMode, type AgentProfileScope, type AgentProfileView, type AgentReasoningMode, type AgentRun } from "@/services/api/agent";
+import { cancelAgentRun, getAgentCapabilities, getAgentProfile, getAgentRun, createAgentRun, decideAgentApproval, sendAgentInterjection, sendAgentMessage, subscribeAgentEvents, updateAgentProfile, type AgentEvent, type AgentPermissionMode, type AgentProfileScope, type AgentProfileView, type AgentReasoningMode, type AgentRun } from "@/services/api/agent";
 import { agentApprovalPresentation } from "@/lib/canvas/agent-approval-presentation";
+import { agentApprovalMatchesSettings, agentImageApproval } from "@/lib/canvas/agent-media-approval";
+import type { AgentMediaSettings } from "@/services/api/agent";
+import { CanvasAgentImageApprovalSettings } from "./canvas-agent-image-approval-settings";
 import { addSkill, listAddedSkills, listSkills, type Skill, type SkillCategory } from "@/services/api/skills";
 import { clearCloudAgentPendingSubmission, cloudAgentConversationTitle, loadCloudAgentConversations, loadCloudAgentPendingSubmission, saveCloudAgentConversations, saveCloudAgentPendingSubmission, type CloudAgentConversation, type CloudAgentPendingSubmission } from "@/services/cloud-agent-conversations";
-import { logicalModelIDForConfig, modelOptionName, resolveModelRequestConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { useThemeStore } from "@/stores/use-theme-store";
+import { logicalModelIDForConfig, modelOptionName, resolveModelRequestConfig, selectableModelsByCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { applyAgentCanvasPatches, refreshCanvasAfterAgent, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { createAgentCanvasSync } from "@/services/agent-canvas-sync";
 import { buildSkillMentionReferences, resolveSkillMentions } from "@/services/skill-runtime";
-import { AgentChatComposer, AgentChatMessage, AgentWorkingMessage, type CloudAgentChatMessage } from "./canvas-cloud-agent-chat-ui";
+import { AgentChatComposer, AgentChatMessage, AgentPlanBar, AgentQuestionBar, AgentWorkingMessage, type CloudAgentChatMessage, type CloudAgentPlanItem } from "./canvas-cloud-agent-chat-ui";
 import { CanvasAgentSkillLibraryModal } from "./canvas-agent-skill-library-modal";
 import { CanvasCloudAgentSettings, agentPermissionLabel, agentPermissionMenuItems, agentPermissionVisual, type AgentContextKey } from "./canvas-cloud-agent-settings";
 import { useAgentPanelLayout } from "./use-agent-panel-layout";
 import "./canvas-cloud-agent.css";
 
-type CloudAgentPanelProps = { canvasId: string; domainProjectId?: string; nodeCount: number; references: CanvasResourceReference[]; open: boolean; onOpen: () => void; onCollapse: () => void; onFocusNode?: (nodeId: string) => void };
+type CloudAgentPanelProps = { canvasId: string; domainProjectId?: string; nodeCount: number; references: CanvasResourceReference[]; open: boolean; prefillPrompt?: string; onOpen: () => void; onCollapse: () => void; onFocusNode?: (nodeId: string) => void };
 type ApprovalState = { approvalId: string; detail: Record<string, unknown>; reason: string };
 type AgentPanelView = "chat" | "history" | "settings";
 
-export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, references, open, onOpen, onCollapse, onFocusNode }: CloudAgentPanelProps) {
-    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, references, open, prefillPrompt, onOpen, onCollapse, onFocusNode }: CloudAgentPanelProps) {
+    const theme = canvasThemes[useActiveTheme()];
     const config = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const reducedMotion = useReducedMotion();
@@ -42,6 +47,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
     const [connectionEpoch, setConnectionEpoch] = useState(0);
     const [messages, setMessages] = useState<CloudAgentChatMessage[]>([]);
     const [prompt, setPrompt] = useState("");
+    const lastPrefillPromptRef = useRef("");
     const [reasoningMode, setReasoningMode] = useState<AgentReasoningMode>("off");
     const [profileView, setProfileView] = useState<AgentProfileView | null>(null);
     const [profileLoading, setProfileLoading] = useState(false);
@@ -73,6 +79,10 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
     const [activeConversationId, setActiveConversationId] = useState(() => nanoid());
     const [historyHydrated, setHistoryHydrated] = useState(false);
     const [pendingHydrated, setPendingHydrated] = useState(false);
+    const [planMinimized, setPlanMinimized] = useState(false);
+    const planItems = useMemo(() => latestAgentPlanItems(messages), [messages]);
+    const planVisible = agentPlanVisible(planItems);
+    const pendingQuestion = useMemo(() => pendingAgentQuestion(messages), [messages]);
     const panelLayout = useAgentPanelLayout();
     const lastSeqRef = useRef(0);
     const canvasSyncRef = useRef<ReturnType<typeof createAgentCanvasSync> | null>(null);
@@ -94,7 +104,11 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
     const currentScope = useRef(conversationScope);
     currentScope.current = conversationScope;
     const running = Boolean(run?.cleanupPending) || run?.status === "running" || run?.status === "queued" || run?.status === "waiting_approval";
-    const selectedModel = config.textModel || config.model || "";
+    const selectedModel = useMemo(() => {
+        const textModels = selectableModelsByCapability(config, "text");
+        const preferred = config.textModel || config.model || "";
+        return textModels.includes(preferred) ? preferred : (textModels[0] || "");
+    }, [config]);
     const reasoningSupported = Boolean(modelCapabilityConfigFor(config, selectedModel).text?.thinking);
     useEffect(() => { if (!reasoningSupported && reasoningMode !== "off") setReasoningMode("off"); }, [reasoningSupported, reasoningMode]);
     const installedSkills = useMemo(() => skills.filter((skill) => skill.isAdded), [skills]);
@@ -102,6 +116,14 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
     const status = run?.status || "idle";
     const statusLabel = status === "waiting_approval" ? "等待审批" : status === "running" || status === "queued" ? "运行中" : status === "completed" ? "已完成" : status === "failed" ? "异常" : status === "cancelled" ? "已停止" : status === "rejected" ? "已拒绝" : "待命";
     const statusColor = status === "failed" ? "#e66b6b" : status === "rejected" || status === "cancelled" ? theme.node.muted : status === "waiting_approval" ? "#d6a24a" : status === "running" || status === "queued" ? "#69c29b" : theme.node.muted;
+
+    useEffect(() => {
+        const value = prefillPrompt?.trim();
+        if (!value || value === lastPrefillPromptRef.current) return;
+        lastPrefillPromptRef.current = value;
+        setPrompt(value);
+        setView("chat");
+    }, [prefillPrompt]);
 
     useEffect(() => {
         if (!open || view !== "chat") setSkillsOpen(false);
@@ -303,7 +325,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                     lastSeqRef.current = event.seq;
                 }
                 setMessages((current) => current.filter((item) => item.id !== `stream-error-${run.id}`));
-                applyAgentEvent(event, setMessages, setRun, setApproval);
+                applyAgentEvent(event, setMessages, setRun, setApproval, setPrompt);
                 canvasSyncRef.current?.receive(event);
             },
             {
@@ -327,8 +349,33 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
         return () => window.removeEventListener("online", reconnect);
     }, [run?.id, connectionStatus]);
 
-    const submit = async () => {
-        const value = prompt.trim();
+    const interject = async (value: string) => {
+        const activeRun = run;
+        if (!value || !activeRun?.id || busy || connectionStatus !== "connected" || currentScope.current !== conversationScope || !historyHydrated) return;
+        const scope = conversationScope;
+        const messageId = `user-${crypto.randomUUID()}`;
+        setBusy(true);
+        try {
+            await sendAgentInterjection(activeRun.id, { text: value, messageId });
+            if (currentScope.current !== scope) return;
+            setPrompt("");
+            setMessages((current) => appendUniqueMessage(current, { id: messageId, role: "user", text: value, interjection: "sent" }));
+        } catch (cause) {
+            if (currentScope.current !== scope) return;
+            const status = (cause as { status?: number }).status;
+            setMessages((current) => appendAgentError(current, `interject-error-${activeConversationId}-${messageId}`, cause, "插话没有送达"));
+            if (status === 409) setPrompt(value);
+        } finally {
+            if (currentScope.current === scope) setBusy(false);
+        }
+    };
+
+    const submit = async (override?: string) => {
+        const value = (override ?? prompt).trim();
+        if (running) {
+            await interject(value);
+            return;
+        }
         if (!value || busy || running || (run && connectionStatus !== "connected") || submissionRequestRef.current || !historyHydrated || !pendingHydrated || currentScope.current !== conversationScope) return;
         const scope = conversationScope;
         submissionRequestRef.current = true;
@@ -436,7 +483,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
         }
     };
 
-    const submitApproval = async (decision: "approve" | "reject") => {
+    const submitApproval = async (decision: "approve" | "reject", mediaSettings?: AgentMediaSettings) => {
         if (!run || !approval || connectionStatus !== "connected" || approvalRequestRef.current === approval.approvalId) return;
         const runId = run.id;
         const approvalId = approval.approvalId;
@@ -444,7 +491,9 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
         approvalRequestRef.current = approvalId;
         setApprovalSubmitting(true);
         try {
-            await decideAgentApproval(runId, approvalId, decision, approval.reason, AbortSignal.timeout(15_000));
+            if (decision === "approve") await saveRemoteUserDataNow();
+            if (currentScope.current !== scope) return;
+            await decideAgentApproval(runId, approvalId, decision, approval.reason, AbortSignal.timeout(15_000), mediaSettings);
             if (currentScope.current === scope) {
                 setApproval((current) => current?.approvalId === approvalId ? null : current);
                 setRun((current) => current?.id === runId && current.status === "waiting_approval" && (!current.approval || current.approval.approvalId === approvalId) ? { ...current, status: decision === "reject" ? "rejected" : "running", approval: undefined } : current);
@@ -455,7 +504,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
             // asking the user to retry. The backend treats identical decisions idempotently.
             try {
                 const snapshot = await getAgentRun(runId, AbortSignal.timeout(5_000));
-                const decided = snapshot.run.events?.some((event) => event.type === "approval_decided" && event.payload.approvalId === approvalId && event.payload.decision === decision);
+                const decided = snapshot.run.events?.some((event) => event.type === "approval_decided" && event.payload.approvalId === approvalId && event.payload.decision === decision && (!mediaSettings || agentApprovalMatchesSettings(event.payload.arguments, mediaSettings)));
                 if (decided) {
                     setApproval((current) => current?.approvalId === approvalId ? null : current);
                     setRun(snapshot.run);
@@ -666,14 +715,24 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                                         nodeCount={nodeCount}
                                         approvalSubmitting={approvalSubmitting || connectionStatus !== "connected"}
                                         onApprovalReasonChange={(reason) => setApproval((current) => (current ? { ...current, reason } : current))}
-                                        onApprove={() => void submitApproval("approve")}
+                                        onApprove={(settings) => void submitApproval("approve", settings)}
                                         onReject={() => void submitApproval("reject")}
                                     />
+                                    {planVisible ? <AgentPlanBar items={planItems} theme={theme} minimized={planMinimized} onToggle={() => setPlanMinimized((value) => !value)} /> : null}
+                                    {pendingQuestion ? (
+                                        <AgentQuestionBar
+                                            question={pendingQuestion}
+                                            theme={theme}
+                                            disabled={approvalSubmitting || connectionStatus !== "connected"}
+                                            onAnswer={(label) => void submit(label)}
+                                        />
+                                    ) : null}
                                     <AgentChatComposer
                                         prompt={prompt}
-                                        disabled={busy || running || Boolean(run && connectionStatus !== "connected") || !historyHydrated || !pendingHydrated}
-                                        sending={busy || running}
-                                        placeholder="输入操作指导；用 @ 引用画布节点，用 / 引用 Skills"
+                                        disabled={Boolean(run && connectionStatus !== "connected") || !historyHydrated || !pendingHydrated}
+                                        sending={busy}
+                                        running={running}
+                                        placeholder={running ? "运行中可直接插话，会在它下一步生效" : "输入操作指导；用 @ 引用画布节点，用 / 引用 Skills"}
                                         theme={theme}
                                         onPromptChange={setPrompt}
                                         onSubmit={() => void submit()}
@@ -736,16 +795,18 @@ function AgentLauncher({ theme, statusColor, approvalPending, reducedMotion, onO
             type="button"
             aria-label="打开云端 Agent"
             title={approvalPending ? "Agent 等待你的审批" : "打开 Agent 助手"}
-            className="canvas-agent-launcher fixed bottom-5 right-5 z-[var(--z-modal-overlay)] flex h-12 items-center gap-2.5 rounded-2xl px-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/35"
-            style={{ color: theme.node.text, background: theme.node.panel, border: `1px solid ${theme.toolbar.border}`, boxShadow: `0 8px 28px ${theme.spatial.shadow}` }}
+            className="canvas-agent-launcher fixed bottom-5 right-5 z-[var(--z-modal-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/35"
+            style={{ color: theme.node.text, "--canvas-agent-launcher-shadow": theme.spatial.shadow } as CSSProperties}
+            data-canvas-no-zoom
             onClick={onOpen}
-            whileHover={reducedMotion ? undefined : { y: -2 }}
-            whileTap={reducedMotion ? undefined : { scale: 0.98 }}
+            whileHover={reducedMotion ? undefined : { y: -3, scale: 1.035 }}
+            whileTap={reducedMotion ? undefined : { scale: 0.96 }}
             transition={{ duration: reducedMotion ? 0 : 0.18 }}
         >
-            <Bot className="size-5" />
-            <span className="text-sm font-semibold">Agent</span>
-            {approvalPending ? <span className="text-xs" style={{ color: statusColor }}>待审批</span> : null}
+            <FluidOrb size={62} color="#7164f6" />
+            <span className="canvas-agent-launcher-label">Agent</span>
+            <span className={cn("canvas-agent-launcher-status", approvalPending && "is-pending")} style={{ "--canvas-agent-status-color": statusColor } as CSSProperties} />
+            {approvalPending ? <span className="canvas-agent-launcher-badge">待审批</span> : null}
         </motion.button>
     );
 }
@@ -843,7 +904,7 @@ function AgentConversation({
     nodeCount: number;
     onFocusNode?: (nodeId: string) => void;
     onApprovalReasonChange: (reason: string) => void;
-    onApprove: () => void;
+    onApprove: (settings?: AgentMediaSettings) => void;
     onReject: () => void;
 }) {
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -937,11 +998,12 @@ function ComposerControls({
                 value={selectedModel}
                 capability="text"
                 onChange={onModelChange}
+                variant="creation"
                 className="!h-8 !min-w-0 !w-36 !max-w-full !border-0 !bg-transparent !px-1.5 !shadow-none"
                 popoverClassName="agent-model-picker-popover"
                 showSelectedPrice={false}
                 showOptionPrices
-                placeholder="选择模型"
+                placeholder="选择文本模型"
             />
             {reasoningSupported ? <Dropdown trigger={["click"]} placement="topLeft" menu={{ items: reasoningMenuItems(reasoningMode, onReasoningModeChange) }}>
                 <button type="button" aria-label="选择 Agent 推理模式" title="推理模式：只用于规划和工具选择" className="flex h-8 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/25" style={{ color: reasoningMode === "off" ? theme.node.muted : theme.accent.primary, background: reasoningMode === "off" ? "transparent" : theme.node.fill }}>
@@ -989,8 +1051,10 @@ function reasoningMenuItems(mode: AgentReasoningMode, onChange: (value: AgentRea
     }));
 }
 
-function ApprovalCard({ approval, theme, submitting, onFocusNode, onReasonChange, onApprove, onReject }: { approval: ApprovalState; theme: CanvasTheme; submitting: boolean; onFocusNode?: (nodeId: string) => void; onReasonChange: (value: string) => void; onApprove: () => void; onReject: () => void }) {
+function ApprovalCard({ approval, theme, submitting, onFocusNode, onReasonChange, onApprove, onReject }: { approval: ApprovalState; theme: CanvasTheme; submitting: boolean; onFocusNode?: (nodeId: string) => void; onReasonChange: (value: string) => void; onApprove: (settings?: AgentMediaSettings) => void; onReject: () => void }) {
     const [showReason, setShowReason] = useState(Boolean(approval.reason));
+    const [mediaSettings, setMediaSettings] = useState<AgentMediaSettings>();
+    const imageApproval = agentImageApproval(approval.detail);
     const action = agentApprovalPresentation(approval.detail);
     return (
         <section className="canvas-agent-approval-card" aria-label={action.title}>
@@ -1002,16 +1066,17 @@ function ApprovalCard({ approval, theme, submitting, onFocusNode, onReasonChange
             <p className="canvas-agent-approval-description" style={{ color: theme.node.muted }}>{action.description}</p>
             {action.items.length ? (
                 <div className="canvas-agent-approval-items" aria-label="涉及节点">
-                    {action.items.map((item, index) => <ApprovalPreviewItemView key={`${item.operation}-${item.nodeId || item.nodeTitle || index}-${index}`} item={item} theme={theme} onFocusNode={onFocusNode} />)}
+                    {action.items.map((item, index) => <ApprovalPreviewItemView key={`${item.operation}-${item.nodeId || item.nodeTitle || index}-${index}`} item={imageApproval ? { ...item, details: item.details?.filter((detail) => !/^(模型|画幅|质量)[：:]/.test(detail)) } : item} theme={theme} onFocusNode={onFocusNode} />)}
                 </div>
             ) : <div className="canvas-agent-approval-empty" style={{ color: theme.node.muted }}>无法确认具体目标，继续前请重新读取画布。</div>}
+            {imageApproval ? <CanvasAgentImageApprovalSettings initial={imageApproval} value={mediaSettings} onChange={setMediaSettings} theme={theme} disabled={submitting} /> : null}
             <button type="button" className="canvas-agent-approval-reason-toggle" aria-expanded={showReason} onClick={() => setShowReason((value) => !value)} disabled={submitting}>
                 {showReason ? "收起拒绝理由" : "填写拒绝理由（可选）"}
             </button>
             {showReason ? <Input.TextArea className="canvas-agent-approval-reason" value={approval.reason} onChange={(event) => onReasonChange(event.target.value)} placeholder="告诉 Agent 为什么暂不执行" autoSize={{ minRows: 2, maxRows: 3 }} maxLength={2000} disabled={submitting} /> : null}
             <div className="canvas-agent-approval-actions">
                 <button type="button" className="canvas-agent-approval-reject" disabled={submitting} onClick={onReject}>暂不执行</button>
-                <button type="button" className="canvas-agent-approval-approve" disabled={submitting} onClick={onApprove}>
+                <button type="button" className="canvas-agent-approval-approve" disabled={submitting} onClick={() => onApprove(mediaSettings)}>
                     {submitting ? <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check className="size-4" aria-hidden="true" />}
                     {submitting ? "正在提交" : "同意执行"}
                 </button>
@@ -1021,7 +1086,7 @@ function ApprovalCard({ approval, theme, submitting, onFocusNode, onReasonChange
 }
 
 function ApprovalPreviewItemView({ item, theme, onFocusNode }: { item: ReturnType<typeof agentApprovalPresentation>["items"][number]; theme: CanvasTheme; onFocusNode?: (nodeId: string) => void }) {
-    const operationLabel = item.operation === "add_node" ? "新增" : item.operation === "update_node" ? "修改" : item.operation === "connect_nodes" ? "连线" : item.operation === "create_storyboard" ? "创建分镜" : item.operation === "edit_storyboard" ? "修改分镜" : "生成";
+    const operationLabel = item.operation === "add_node" ? "新增" : item.operation === "update_node" ? "修改" : item.operation === "connect_nodes" ? "连线" : item.operation === "create_storyboard" ? "创建分镜" : item.operation === "edit_storyboard" ? "修改分镜" : item.operation === "plan_step" ? "计划" : "生成";
     const renderNode = (title: string | undefined, id: string | undefined, typeLabel: string | undefined, role: "source" | "target" | "node") => {
         if (!title) return null;
         const content = <><span className="canvas-agent-approval-node-title">{title}</span>{typeLabel ? <span className="canvas-agent-approval-node-type">{typeLabel}</span> : null}</>;
@@ -1067,7 +1132,7 @@ function formatConversationTime(value: string) {
     if (date.toDateString() === today.toDateString()) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
     return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
-function applyAgentEvent(event: AgentEvent, setMessages: Dispatch<SetStateAction<CloudAgentChatMessage[]>>, setRun: Dispatch<SetStateAction<AgentRun | null>>, setApproval: Dispatch<SetStateAction<ApprovalState | null>>) {
+function applyAgentEvent(event: AgentEvent, setMessages: Dispatch<SetStateAction<CloudAgentChatMessage[]>>, setRun: Dispatch<SetStateAction<AgentRun | null>>, setApproval: Dispatch<SetStateAction<ApprovalState | null>>, setPrompt?: Dispatch<SetStateAction<string>>) {
     const payload = event.payload || {};
     const text = String(payload.text || payload.summary || payload.message || "");
     if (event.type === "run_status") {
@@ -1104,6 +1169,51 @@ function applyAgentEvent(event: AgentEvent, setMessages: Dispatch<SetStateAction
         const id = String(payload.messageId || `${event.runId}:reasoning`);
         setMessages((current) => upsertTextMessage(current, id, text, event.type === "reasoning_delta")
             .map((item) => item.id === id ? { ...item, reasoning: true } : item));
+        return;
+    }
+    if (event.type === "plan_updated" && Array.isArray(payload.items)) {
+        const id = `plan-${event.runId}`;
+        const planItems = payload.items as CloudAgentPlanItem[];
+        setMessages((current) => {
+            const index = current.findIndex((entry) => entry.id === id);
+            const message: CloudAgentChatMessage = { id, role: "tool", text: "", planItems };
+            if (index < 0) return [...current, message];
+            const next = [...current];
+            next[index] = message;
+            return next;
+        });
+        return;
+    }
+    if (event.type === "user_interjection") {
+        if (!text) return;
+        setMessages((current) => appendUniqueMessage(current, { id: String(payload.messageId || event.eventId), role: "user", text, interjection: "sent" }));
+        return;
+    }
+    if (event.type === "user_interjection_dropped") {
+        const messageId = String(payload.messageId || event.eventId);
+        const reason = String(payload.reason || "本轮已结束");
+        setMessages((current) => {
+            const marked = current.map((item) => item.id === messageId ? { ...item, interjection: "undelivered" as const } : item);
+            return appendUniqueMessage(marked, { id: `interjection-dropped-${messageId}`, role: "system", text: `${reason}，这条插话没有送到模型。需要的话重新发一次，它会作为新一轮。` });
+        });
+        setPrompt?.((current) => (current.trim() ? current : text));
+        return;
+    }
+    if (event.type === "user_question") {
+        const options = Array.isArray(payload.options)
+            ? (payload.options as Array<{ label?: unknown; detail?: unknown }>)
+                .map((option) => ({ label: String(option?.label || "").trim(), detail: option?.detail === undefined ? undefined : String(option.detail) }))
+                .filter((option) => option.label)
+            : [];
+        const question = String(payload.question || "").trim();
+        if (!question || options.length < 2) return;
+        const id = `question-${event.runId}:${event.seq ?? event.eventId}`;
+        setMessages((current) => appendUniqueMessage(current, {
+            id,
+            role: "assistant",
+            text: "",
+            question: { question, options, allowFreeform: payload.allowFreeform !== false },
+        }));
         return;
     }
     if (event.type === "assistant_message") {

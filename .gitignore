@@ -61,8 +61,12 @@ assets/prototypes/.*.drawio.bkp
 camera_language_guide.md
 .superdesign
 .playwright-cli/
+# Local Playwright / browser verification artifacts.
+/output/
 /project-memory/
 .workbuddy/
 
 # Local backend executable; never commit build output.
 backend/cmd/server/server
+# One-off local probe scripts and their compiled output.
+backend/tmp_*

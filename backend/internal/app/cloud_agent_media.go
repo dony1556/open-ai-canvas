@@ -213,7 +213,8 @@ func cloudAgentMediaDocument(repo *repository.Repository, userID, canvasID strin
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if args.SnapshotHash == "" || cloudAgentCanvasHash(doc) != args.SnapshotHash {
+	unchanged := args.SnapshotHash != "" && (cloudAgentCanvasHash(doc) == args.SnapshotHash || cloudAgentMediaContentHash(doc) == args.SnapshotHash)
+	if !unchanged {
 		return nil, nil, nil, creationConflict("画布已变化，请重新读取画布并重新审批；未提交生成任务")
 	}
 	nodes, err := creationObjects(doc["nodes"])
@@ -447,6 +448,22 @@ func cloudAgentMediaOperation(mode string, refs map[string]any) string {
 	return ""
 }
 
+func (s *Service) fillCloudAgentMediaSnapshotHash(userID, canvasID string, a *cloudAgentMediaArgs) error {
+	if a == nil || strings.TrimSpace(a.SnapshotHash) != "" {
+		return nil
+	}
+	canvas, err := s.repo.CanvasProjectForUser(userID, canvasID)
+	if err != nil {
+		return err
+	}
+	doc, err := creationDocument(canvas.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	a.SnapshotHash = cloudAgentMediaContentHash(doc)
+	return nil
+}
+
 func (s *Service) prepareCloudAgentMedia(run *model.CloudAgentExecution, state *cloudAgentRuntime, call cloudAgentCall) (CreateTaskRequest, *cloudAgentMediaPlan, error) {
 	var a cloudAgentMediaArgs
 	if err := decodeCloudAgentJSONObject(call.Function.Arguments, &a); err != nil {
@@ -454,6 +471,9 @@ func (s *Service) prepareCloudAgentMedia(run *model.CloudAgentExecution, state *
 	}
 	a.Mode = strings.ToLower(strings.TrimSpace(a.Mode))
 	a.DraftRunID = run.ID
+	if err := s.fillCloudAgentMediaSnapshotHash(run.UserID, state.Request.CanvasID, &a); err != nil {
+		return CreateTaskRequest{}, nil, err
+	}
 	if err := validateCloudAgentMediaArgs(a, state); err != nil {
 		return CreateTaskRequest{}, nil, err
 	}

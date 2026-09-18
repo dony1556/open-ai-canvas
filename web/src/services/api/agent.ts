@@ -3,6 +3,13 @@ import { consumeTaskTextStream, createTaskTextStreamParser } from "@/services/ap
 
 export type AgentPermissionMode = "read_only" | "auto" | "request_approval";
 export type AgentReasoningMode = "off" | "auto" | "deep";
+export type AgentMediaSettings = {
+    logicalModelId?: string;
+    channelId?: string;
+    channelModelKey?: string;
+    size: string;
+    quality: string;
+};
 export type AgentProfileScope = "user" | "project" | "canvas";
 
 export type AgentProfileLayer = {
@@ -20,7 +27,7 @@ export type AgentProfileView = {
     layers: AgentProfileLayer[];
 };
 
-export type AgentApprovalPreviewOperation = "add_node" | "update_node" | "connect_nodes" | "generate_media" | "create_storyboard" | "edit_storyboard";
+export type AgentApprovalPreviewOperation = "add_node" | "update_node" | "connect_nodes" | "generate_media" | "create_storyboard" | "edit_storyboard" | "plan_step";
 
 export type AgentApprovalPreviewItem = {
     operation: AgentApprovalPreviewOperation;
@@ -107,7 +114,7 @@ export type CreateAgentRunInput = {
     skillIds?: string[];
     permissionMode?: AgentPermissionMode;
     contextScope?: string[];
-    budget?: { maxCredits?: number; maxGenerationTasks?: number; maxVideoSeconds?: number };
+    budget?: { maxCredits?: number; maxGenerationTasks?: number; maxVideoSeconds?: number; maxSteps?: number };
     idempotencyKey: string;
 };
 
@@ -136,6 +143,10 @@ export async function createAgentRun(input: CreateAgentRunInput) {
 
 export async function sendAgentMessage(runId: string, input: CreateAgentRunInput) {
     return submitAgentRequest(`/agent/runs/${encodeURIComponent(runId)}/messages`, input);
+}
+
+export function sendAgentInterjection(runId: string, input: { text: string; messageId: string }) {
+    return http.post<{ accepted: boolean; pending: number }>(`/agent/runs/${encodeURIComponent(runId)}/interjections`, input, { timeout: 20_000 });
 }
 
 export function getAgentCapabilities() {
@@ -167,8 +178,8 @@ export function undoAgentCanvasRun(runId: string, input: { stepId?: string; expe
     return http.post<{ accepted: boolean; snapshotHash: string }>(`/agent/runs/${encodeURIComponent(runId)}/undo`, input, { signal });
 }
 
-export async function decideAgentApproval(runId: string, approvalId: string, decision: "approve" | "reject", reason?: string, signal?: AbortSignal) {
-    return http.post<{ accepted: boolean }>(`/agent/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision`, { decision, reason: reason?.trim() || undefined }, { signal });
+export async function decideAgentApproval(runId: string, approvalId: string, decision: "approve" | "reject", reason?: string, signal?: AbortSignal, mediaSettings?: AgentMediaSettings) {
+    return http.post<{ accepted: boolean }>(`/agent/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision`, { decision, reason: reason?.trim() || undefined, ...(mediaSettings ? { mediaSettings } : {}) }, { signal });
 }
 
 export function subscribeAgentEvents(runId: string, onEvent: (event: AgentEvent) => void, options: { after?: number; onError?: (error: unknown) => void; onConnectionChange?: (status: "connecting" | "connected" | "reconnecting" | "disconnected") => void; timeoutMs?: number } = {}) {

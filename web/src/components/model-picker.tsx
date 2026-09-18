@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
-import { Check, ChevronDown, Coins } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, Coins } from "lucide-react";
 import { Popover } from "antd";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
@@ -8,7 +8,7 @@ import { formatPriceRange, modelQuoteRequest, normalizeTierResolution, priceTier
 import { compatibleModelInGroup, configuredModelDisplayName, groupModelsByDisplayName, modelCompatibilityError, resolveCompatibleModel, type ModelRequirements } from "@/lib/model-selection";
 import { cn } from "@/lib/utils";
 import { modelDisplayName, modelIcon, modelOptionName, PUBLIC_MODEL_CATALOG_ID, resolveModelChannel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
-import { useThemeStore } from "@/stores/use-theme-store";
+import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { ModelLogo } from "@/components/model-logo";
 import { quoteLogicalModel, type LogicalModelQuote } from "@/services/api/logical-models";
@@ -42,16 +42,18 @@ export function ModelPicker({
     onMissingConfig,
     showSelectedPrice = true,
     showOptionPrices = showSelectedPrice,
-    variant = "default",
+    variant = "creation",
     requirements,
     showConfiguredModelName = false,
 }: ModelPickerProps) {
     const creditsEnabled = useUserStore((state) => state.features.creditsEnabled);
     const pickerId = useId();
     // 双保险：即使 store merge 写出非法 theme，这里也兜底到 dark，避免 "reading 'node'" 崩溃
-    const rawTheme = useThemeStore((state) => state.theme);
+    const rawTheme = useActiveTheme();
     const theme = (canvasThemes[rawTheme as keyof typeof canvasThemes] ?? canvasThemes.dark) as CanvasTheme;
     const [open, setOpen] = useState(false);
+    const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+    const [previewedModel, setPreviewedModel] = useState("");
     const [triggerWidth, setTriggerWidth] = useState<number | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
@@ -132,6 +134,10 @@ export function ModelPicker({
     const setPickerOpen = (nextOpen: boolean) => {
         if (nextOpen && !options.length) onMissingConfig?.();
         if (nextOpen) window.dispatchEvent(new CustomEvent("model-picker-open", { detail: pickerId }));
+        if (nextOpen) {
+            setPreviewedModel(current || options[0] || "");
+            setActiveGroupKey(null);
+        }
         setOpen(nextOpen);
     };
     const focusMenuOption = (last = false) => {
@@ -166,7 +172,10 @@ export function ModelPicker({
         <div
             ref={menuRef}
             data-canvas-no-zoom
-            className={cn("canvas-model-picker-menu max-w-[calc(100vw-24px)]", creationVariant ? "creation-model-picker-menu w-[360px]" : "w-[var(--panel-width-compact)]")}
+            className={cn(
+                "canvas-model-picker-menu creation-model-picker-menu max-w-[calc(100vw-24px)]",
+                activeGroupKey === null ? "is-brand-list" : "is-model-list",
+            )}
             style={
                 {
                     background: theme.node.panel,
@@ -180,22 +189,35 @@ export function ModelPicker({
             onMouseDown={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
         >
-            {creationVariant ? (
-                <div className="creation-model-picker-heading">
-                    <span>选择模型</span>
-                    {current ? <strong>{pickerModelDisplayName(config, current, showConfiguredModelName)}</strong> : null}
-                </div>
-            ) : null}
             {optionGroups.length ? (
-                optionGroups.map((group) => (
-                    <section key={group.key} className="canvas-model-picker-group min-w-0 overflow-hidden">
-                        <div className="canvas-model-picker-group-label" style={{ color: theme.node.muted }}>
-                            <span className="truncate">{group.label}</span>
-                            {group.scope ? (
-                                <span className="shrink-0" style={{ color: theme.node.muted }}>
-                                    {group.scope}
-                                </span>
-                            ) : null}
+                activeGroupKey === null ? (
+                    <div className="canvas-model-picker-brands" aria-label="选择模型品牌">
+                        {optionGroups.map((group) => {
+                            const groupCurrent = group.models.find((item) => item.models.includes(current));
+                            const firstModel = groupCurrent?.models[0] || group.models[0]?.models[0] || "";
+                            return <button key={group.key} type="button" className="canvas-model-picker-brand" onClick={() => { setActiveGroupKey(group.key); setPreviewedModel(firstModel); }}>
+                                <span className="canvas-model-picker-brand-icon"><ModelIcon config={config} model={firstModel} /></span>
+                                <span className="canvas-model-picker-brand-copy"><strong>{group.label}</strong><small>{group.models.length} 个模型{group.scope ? ` · ${group.scope}` : ""}</small></span>
+                                <ChevronDown className="canvas-model-picker-brand-arrow" aria-hidden="true" />
+                            </button>;
+                        })}
+                    </div>
+                ) : <div className="canvas-model-picker-two-pane">
+                    <div className="canvas-model-picker-brand-rail" aria-label="模型品牌">
+                        {optionGroups.map((group) => {
+                            const groupCurrent = group.models.find((item) => item.models.includes(current));
+                            const firstModel = groupCurrent?.models[0] || group.models[0]?.models[0] || "";
+                            return <button key={group.key} type="button" className={cn("canvas-model-picker-brand", activeGroupKey === group.key && "is-active")} aria-pressed={activeGroupKey === group.key} onClick={() => { setActiveGroupKey(group.key); setPreviewedModel(firstModel); }}>
+                                <span className="canvas-model-picker-brand-icon"><ModelIcon config={config} model={firstModel} /></span>
+                                <span className="canvas-model-picker-brand-copy"><strong>{group.label}</strong><small>{group.models.length} 个模型{group.scope ? ` · ${group.scope}` : ""}</small></span>
+                                <ChevronDown className="canvas-model-picker-brand-arrow" aria-hidden="true" />
+                            </button>;
+                        })}
+                    </div>
+                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0 overflow-hidden">
+                        <div className="canvas-model-picker-secondary-head">
+                            <button type="button" className="canvas-model-picker-back" onClick={() => setActiveGroupKey(null)} aria-label="返回品牌列表"><ChevronLeft /></button>
+                            <span><strong>{group.label}</strong>{group.scope ? <small>{group.scope}</small> : null}</span>
                         </div>
                         <div className="grid min-w-0 gap-1">
                             {group.models.map((modelGroup) => {
@@ -212,8 +234,10 @@ export function ModelPicker({
                                         aria-disabled={Boolean(disabledReason)}
                                         disabled={Boolean(disabledReason)}
                                         title={disabledReason || pickerModelOptionLabel(config, displayModel, showConfiguredModelName)}
-                                        className="canvas-model-picker-option disabled:cursor-not-allowed disabled:opacity-45"
+                                        className={cn("canvas-model-picker-option disabled:cursor-not-allowed disabled:opacity-45", previewedModel === displayModel && "is-previewed")}
                                         style={{ background: selected ? theme.toolbar.activeBg : "transparent", color: theme.node.text }}
+                                        onMouseEnter={() => setPreviewedModel(displayModel)}
+                                        onFocus={() => setPreviewedModel(displayModel)}
                                         onClick={() => {
                                             if (!model) return;
                                             onChange(model);
@@ -226,18 +250,19 @@ export function ModelPicker({
                                             model={displayModel}
                                             capability={capability}
                                             theme={theme}
-                                            creationVariant={creationVariant}
+                                            creationVariant
                                             showConfiguredModelName={showConfiguredModelName}
                                             showPrice={showOptionPrices && creditsEnabled}
                                             disabledReason={disabledReason}
+                                            showDescription={selected || previewedModel === displayModel}
                                         />
-                                        {selected ? <Check className="canvas-model-picker-option-check" style={{ color: theme.node.activeStroke }} /> : null}
+                                        {selected ? <Check className="canvas-model-picker-option-check ml-1 shrink-0" style={{ color: theme.node.activeStroke }} /> : null}
                                     </button>
                                 );
                             })}
                         </div>
-                    </section>
-                ))
+                    </section>)}
+                </div>
             ) : (
                 <div className="canvas-model-picker-empty" style={{ color: theme.node.muted }}>
                     {emptyModelLabel(config, capability)}
@@ -256,8 +281,8 @@ export function ModelPicker({
                 arrow={false}
                 content={content}
                 classNames={{
-                    root: cn("canvas-model-picker-popover", creationVariant && "creation-model-picker-popover", popoverClassName),
-                    container: cn("canvas-composer-popover-surface", creationVariant && "creation-model-picker-surface"),
+                    root: cn("canvas-model-picker-popover", "creation-model-picker-popover", popoverClassName),
+                    container: cn("canvas-composer-popover-surface", "creation-model-picker-surface"),
                     content: "canvas-composer-popover-content",
                 }}
             >
@@ -300,6 +325,7 @@ function ModelLabel({
     showConfiguredModelName,
     showPrice,
     disabledReason,
+    showDescription,
 }: {
     config: AiConfig;
     model: string;
@@ -309,6 +335,7 @@ function ModelLabel({
     showConfiguredModelName: boolean;
     showPrice: boolean;
     disabledReason?: string;
+    showDescription: boolean;
 }) {
     const meta = modelMenuMeta(model, capability);
     const channel = resolveModelChannel(config, model);
@@ -324,13 +351,17 @@ function ModelLabel({
             <span className="grid size-6 shrink-0 place-items-center rounded-md" style={{ background: theme.toolbar.itemHover }}>
                 <ModelIcon config={config} model={model} />
             </span>
-            <span className="min-w-0 flex-1 overflow-hidden">
+            <span className="min-w-44 flex-1 overflow-hidden">
                 <span className="block min-w-0 truncate text-[var(--fs-label)] font-medium leading-none">{pickerModelDisplayName(config, model, showConfiguredModelName)}</span>
-                <span className="mt-1 block truncate text-[var(--fs-tiny)]" style={{ color: theme.node.muted }} title={capabilitySummary}>
+                <span className={cn("canvas-model-picker-description mt-1 block truncate text-[var(--fs-tiny)]", showDescription && "is-visible")} style={{ color: theme.node.muted }} title={capabilitySummary}>
                     {capabilitySummary}
                 </span>
             </span>
-            {showPrice ? <ModelPrice price={modelMenuPrice(config, model, capability, true)} /> : null}
+            {showPrice ? (
+                <span className="ml-auto shrink-0 pl-2">
+                    <ModelPrice price={modelMenuPrice(config, model, capability, true)} />
+                </span>
+            ) : null}
             {!creationVariant && meta.time ? (
                 <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[var(--fs-tiny)] tabular-nums" style={{ background: theme.toolbar.itemHover, color: theme.node.muted }}>
                     {meta.time}
