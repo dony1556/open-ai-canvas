@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import { Button, Dropdown, Input } from "antd";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ArrowLeft, Bot, Check, ChevronRight, CircleDot, Clock3, Download, History, LoaderCircle, MessageSquarePlus, Settings2, ShieldCheck, Trash2, Sparkles, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, CircleDot, Clock3, Download, History, LoaderCircle, MessageSquarePlus, MoveDiagonal2, Settings2, ShieldCheck, Trash2, Sparkles, X } from "lucide-react";
 import { saveAs } from "file-saver";
 import { buildAgentDebugExport } from "@/lib/canvas/agent-debug-export";
 import { agentPlanVisible, latestAgentPlanItems, pendingAgentQuestion } from "@/lib/canvas/cloud-agent-plan";
@@ -10,6 +10,7 @@ import { nanoid } from "nanoid";
 import { ModelPicker } from "@/components/model-picker";
 import { FluidOrb } from "@/components/ui/fluid-orb";
 import { cn } from "@/lib/utils";
+import { markdownPlainText } from "@/lib/markdown-plain-text";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
@@ -23,6 +24,7 @@ import { addSkill, listAddedSkills, listSkills, type Skill, type SkillCategory }
 import { clearCloudAgentPendingSubmission, cloudAgentConversationTitle, loadCloudAgentConversations, loadCloudAgentPendingSubmission, saveCloudAgentConversations, saveCloudAgentPendingSubmission, type CloudAgentConversation, type CloudAgentPendingSubmission } from "@/services/cloud-agent-conversations";
 import { logicalModelIDForConfig, modelOptionName, resolveModelRequestConfig, selectableModelsByCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
+import { useAppearanceStore } from "@/stores/use-appearance-store";
 import { applyAgentCanvasPatches, refreshCanvasAfterAgent, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { createAgentCanvasSync } from "@/services/agent-canvas-sync";
 import { buildSkillMentionReferences, resolveSkillMentions } from "@/services/skill-runtime";
@@ -30,6 +32,8 @@ import { AgentChatComposer, AgentChatMessage, AgentPlanBar, AgentQuestionBar, Ag
 import { CanvasAgentSkillLibraryModal } from "./canvas-agent-skill-library-modal";
 import { CanvasCloudAgentSettings, agentPermissionLabel, agentPermissionMenuItems, agentPermissionVisual, type AgentContextKey } from "./canvas-cloud-agent-settings";
 import { useAgentPanelLayout } from "./use-agent-panel-layout";
+import { useAgentLauncherPosition } from "./use-agent-launcher-position";
+import { AgentWelcome } from "./canvas-agent-welcome";
 import "./canvas-cloud-agent.css";
 
 type CloudAgentPanelProps = { canvasId: string; domainProjectId?: string; nodeCount: number; references: CanvasResourceReference[]; open: boolean; prefillPrompt?: string; onOpen: () => void; onCollapse: () => void; onFocusNode?: (nodeId: string) => void };
@@ -597,8 +601,8 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.985 }}
                         transition={{ duration: reducedMotion ? 0 : 0.26, ease: [0.16, 1, 0.3, 1] }}
-                        className="canvas-agent-panel fixed z-[var(--z-modal-overlay)] flex min-w-0 flex-col overflow-hidden rounded-2xl border max-sm:rounded-b-none"
-                        style={{ ...panelLayout.style, background: theme.node.panel, borderColor: theme.toolbar.border, color: theme.node.text, boxShadow: `0 28px 90px ${theme.spatial.shadow}` }}
+                        className="canvas-agent-panel fixed z-[var(--z-modal-overlay)] flex min-w-0 flex-col overflow-hidden"
+                        style={{ ...panelLayout.style, "--agent-surface-base": theme.node.panel, "--agent-ink": theme.node.text, "--agent-accent": theme.accent.primary, "--agent-shadow-color": theme.spatial.shadow } as CSSProperties & Record<`--${string}`, string>}
                         aria-label="Agent 工作台"
                         data-canvas-no-zoom
                         data-canvas-wheel-scroll
@@ -612,10 +616,11 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                             aria-label="调整 Agent 面板大小"
                             title="拖动调整宽高，也可用方向键调整"
                             data-agent-resize="northwest"
-                            className="absolute left-0 top-0 z-10 hidden size-5 cursor-nw-resize touch-none opacity-50 transition-opacity hover:opacity-100 focus-visible:outline focus-visible:outline-2 sm:block"
+                            className="agent-panel-resize-corner absolute left-2 top-2 z-10 hidden size-5 cursor-nw-resize touch-none place-items-center rounded-md opacity-60 transition-opacity hover:opacity-100 focus-visible:outline focus-visible:outline-2 sm:grid"
                             onKeyDown={panelLayout.onResizeKeyDown}
+                            style={{ color: theme.node.muted }}
                         >
-                            <span className="absolute left-1.5 top-1.5 size-2 border-l-2 border-t-2 rounded-tl" style={{ borderColor: theme.node.muted }} />
+                            <MoveDiagonal2 className="size-3" aria-hidden="true" />
                         </button>
                         <AnimatePresence mode="wait" initial={false}>
                             {view === "settings" ? (
@@ -675,6 +680,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                                 <motion.div key="chat" className="flex min-h-0 flex-1 flex-col" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -12 }} transition={{ duration: reducedMotion ? 0 : 0.18 }}>
                                     <AgentHeader
                                         theme={theme}
+                                        hasMessages={messages.length > 0}
                                         statusLabel={statusLabel}
                                         statusColor={statusColor}
                                         nodeCount={nodeCount}
@@ -714,6 +720,8 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                                         approval={approval}
                                         nodeCount={nodeCount}
                                         approvalSubmitting={approvalSubmitting || connectionStatus !== "connected"}
+                                        onChooseSkill={() => setSkillsOpen(true)}
+                                        onDraftPrompt={(draft) => setPrompt((current) => current.trim() ? `${current}\n\n${draft}` : draft)}
                                         onApprovalReasonChange={(reason) => setApproval((current) => (current ? { ...current, reason } : current))}
                                         onApprove={(settings) => void submitApproval("approve", settings)}
                                         onReject={() => void submitApproval("reject")}
@@ -732,7 +740,7 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
                                         disabled={Boolean(run && connectionStatus !== "connected") || !historyHydrated || !pendingHydrated}
                                         sending={busy}
                                         running={running}
-                                        placeholder={running ? "运行中可直接插话，会在它下一步生效" : "输入操作指导；用 @ 引用画布节点，用 / 引用 Skills"}
+                                        placeholder={running ? "运行中可直接插话，会在它下一步生效" : "输入操作指导；用 @ 引用画布节点，用 / 或 、 引用 Skills"}
                                         theme={theme}
                                         onPromptChange={setPrompt}
                                         onSubmit={() => void submit()}
@@ -790,17 +798,18 @@ export function CanvasCloudAgentPanel({ canvasId, domainProjectId, nodeCount, re
 }
 
 function AgentLauncher({ theme, statusColor, approvalPending, reducedMotion, onOpen }: { theme: CanvasTheme; statusColor: string; approvalPending: boolean; reducedMotion: boolean; onOpen: () => void }) {
+    const { position, dragging, handlers } = useAgentLauncherPosition(onOpen);
     return (
         <motion.button
             type="button"
             aria-label="打开云端 Agent"
-            title={approvalPending ? "Agent 等待你的审批" : "打开 Agent 助手"}
-            className="canvas-agent-launcher fixed bottom-5 right-5 z-[var(--z-modal-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/35"
-            style={{ color: theme.node.text, "--canvas-agent-launcher-shadow": theme.spatial.shadow } as CSSProperties}
+            title={`${approvalPending ? "Agent 等待你的审批" : "打开 Agent 助手"} · 拖动可调整位置，聚焦后可用方向键移动`}
+            className={cn("canvas-agent-launcher fixed z-[var(--z-modal-overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/35", dragging && "is-dragging")}
+            style={{ ...position, color: theme.node.text, "--canvas-agent-launcher-shadow": theme.spatial.shadow } as CSSProperties}
             data-canvas-no-zoom
-            onClick={onOpen}
-            whileHover={reducedMotion ? undefined : { y: -3, scale: 1.035 }}
-            whileTap={reducedMotion ? undefined : { scale: 0.96 }}
+            {...handlers}
+            whileHover={reducedMotion || dragging ? undefined : { scale: 1.035 }}
+            whileTap={reducedMotion || dragging ? undefined : { scale: 0.96 }}
             transition={{ duration: reducedMotion ? 0 : 0.18 }}
         >
             <FluidOrb size={62} color="#7164f6" />
@@ -811,23 +820,20 @@ function AgentLauncher({ theme, statusColor, approvalPending, reducedMotion, onO
     );
 }
 
-function AgentHeader({ theme, statusLabel, statusColor, nodeCount, onNew, onHistory, onSettings, onCollapse, onExport, exporting }: { theme: CanvasTheme; statusLabel: string; statusColor: string; nodeCount: number; onNew: () => void; onHistory: () => void; onSettings: () => void; onCollapse: () => void; onExport: () => void; exporting: boolean }) {
+function AgentHeader({ theme, hasMessages, statusLabel, statusColor, nodeCount, onNew, onHistory, onSettings, onCollapse, onExport, exporting }: { theme: CanvasTheme; hasMessages: boolean; statusLabel: string; statusColor: string; nodeCount: number; onNew: () => void; onHistory: () => void; onSettings: () => void; onCollapse: () => void; onExport: () => void; exporting: boolean }) {
     return (
-        <header data-agent-drag-handle className="flex h-[68px] shrink-0 items-center gap-3 px-4" style={{ boxShadow: `inset 0 -1px 0 ${theme.toolbar.border}` }}>
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl" style={{ color: theme.node.text, background: theme.node.fill }}>
-                <Bot className="size-4" />
-            </span>
+        <header data-agent-drag-handle className="agent-panel-header flex shrink-0 items-center gap-3">
             <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold">Agent</span>
-                    <span className="flex items-center gap-1 text-[11px]" style={{ color: statusColor }}>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="agent-panel-title">{hasMessages ? "画布助手" : "新对话"}</span>
+                    <span className="agent-panel-status flex items-center gap-1" style={{ color: statusColor }}>
                         <CircleDot className="size-3" />
                         {statusLabel}
                     </span>
                 </div>
-                <div className="mt-0.5 text-[11px] opacity-40">当前画布 · {nodeCount} 个节点</div>
+                <div className="agent-panel-context">Agent · 当前画布 {nodeCount} 个节点</div>
             </div>
-            <div className="flex items-center gap-0.5">
+            <div className="agent-header-actions flex items-center gap-0.5" style={{ color: theme.node.muted }}>
                 <Button type="text" shape="circle" icon={<Download className="size-4" />} loading={exporting} onClick={onExport} aria-label="导出 Agent 调试记录" title="导出对话、工具参数、审批和错误（分享前请检查隐私）" />
                 <Button type="text" shape="circle" icon={<MessageSquarePlus className="size-4" />} onClick={onNew} aria-label="新建对话" title="新建对话" />
                 <Button type="text" shape="circle" icon={<History className="size-4" />} onClick={onHistory} aria-label="历史对话" title="历史对话" />
@@ -841,7 +847,7 @@ function AgentHeader({ theme, statusLabel, statusColor, nodeCount, onNew, onHist
 function AgentHistory({ conversations, activeConversationId, theme, onBack, onNew, onOpen, onDelete }: { conversations: CloudAgentConversation[]; activeConversationId: string; theme: CanvasTheme; onBack: () => void; onNew: () => void; onOpen: (conversation: CloudAgentConversation) => void; onDelete: (id: string) => void }) {
     return (
         <div className="canvas-agent-history-root flex min-h-0 min-w-0 flex-1 flex-col">
-            <header data-agent-drag-handle className="flex h-[68px] shrink-0 items-center gap-2 px-3" style={{ boxShadow: `inset 0 -1px 0 ${theme.toolbar.border}` }}>
+            <header data-agent-drag-handle className="agent-panel-header flex shrink-0 items-center gap-2">
                 <Button type="text" shape="circle" icon={<ArrowLeft className="size-4" />} onClick={onBack} aria-label="返回对话" />
                 <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold">历史对话</div>
@@ -890,6 +896,8 @@ function AgentConversation({
     approval,
     approvalSubmitting,
     nodeCount,
+    onChooseSkill,
+    onDraftPrompt,
     onFocusNode,
     onApprovalReasonChange,
     onApprove,
@@ -902,11 +910,14 @@ function AgentConversation({
     approval: ApprovalState | null;
     approvalSubmitting: boolean;
     nodeCount: number;
+    onChooseSkill: () => void;
+    onDraftPrompt: (prompt: string) => void;
     onFocusNode?: (nodeId: string) => void;
     onApprovalReasonChange: (reason: string) => void;
     onApprove: (settings?: AgentMediaSettings) => void;
     onReject: () => void;
 }) {
+    const brandName = useAppearanceStore((state) => state.appearance.brandName);
     const scrollRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const followRef = useRef(true);
@@ -933,12 +944,12 @@ function AgentConversation({
     }, []);
 
     return (
-        <div ref={scrollRef} data-agent-conversation className="thin-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-5" onScroll={(event) => {
+        <div ref={scrollRef} data-agent-conversation className="agent-conversation thin-scrollbar min-h-0 flex-1 overflow-y-auto" onScroll={(event) => {
             const element = event.currentTarget;
             followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
         }}>
-            {!messages.length ? <AgentEmptyState theme={theme} nodeCount={nodeCount} /> : null}
-            <div ref={contentRef} className="space-y-2.5">
+            {!messages.length ? <AgentWelcome brandName={brandName} nodeCount={nodeCount} onChooseSkill={onChooseSkill} onDraftPrompt={onDraftPrompt} /> : null}
+            <div ref={contentRef} className="agent-conversation-messages">
                 {messages.map((item) => (
                     <AgentChatMessage key={item.id} item={item} theme={theme} references={references} onFocusNode={onFocusNode} isStreaming={busy && !approval && item.streaming === true && item === messages.at(-1)} />
                 ))}
@@ -947,18 +958,6 @@ function AgentConversation({
                     <AgentWorkingMessage theme={theme} label="正在处理当前画布" />
                 ) : null}
             </div>
-        </div>
-    );
-}
-
-function AgentEmptyState({ theme, nodeCount }: { theme: CanvasTheme; nodeCount: number }) {
-    return (
-        <div className="flex h-full min-h-72 flex-col items-center justify-center px-8 pb-8 text-center">
-            <div className="grid size-12 place-items-center rounded-2xl" style={{ background: theme.node.fill, color: theme.node.muted }}>
-                <Bot className="size-6" />
-            </div>
-            <h2 className="mt-5 text-lg font-semibold">现在想做什么？</h2>
-            <p className="mt-2 max-w-64 text-xs leading-5" style={{ color: theme.node.muted }}>当前画布有 {nodeCount} 个节点。Agent 可以按权限读取画布、调用已启用 Skill、整理文本节点并提交受预算约束的生成任务。</p>
         </div>
     );
 }
@@ -991,6 +990,7 @@ function ComposerControls({
     selectedSkillCount: number;
 }) {
     const permissionVisual = agentPermissionVisual(permissionMode);
+    const PermissionIcon = permissionVisual.icon;
     return (
         <div className="flex min-w-0 flex-wrap items-center gap-0.5">
             <ModelPicker
@@ -999,7 +999,7 @@ function ComposerControls({
                 capability="text"
                 onChange={onModelChange}
                 variant="creation"
-                className="!h-8 !min-w-0 !w-36 !max-w-full !border-0 !bg-transparent !px-1.5 !shadow-none"
+                className="!h-8 !min-w-0 !w-52 !max-w-full !border-0 !bg-transparent !px-1.5 !shadow-none"
                 popoverClassName="agent-model-picker-popover"
                 showSelectedPrice={false}
                 showOptionPrices
@@ -1013,12 +1013,12 @@ function ComposerControls({
             <Dropdown trigger={["click"]} placement="topLeft" menu={{ items: agentPermissionMenuItems(permissionMode, onPermissionChange) }}>
                 <button
                     type="button"
-                    className="flex h-8 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/25"
+                    className="grid size-8 shrink-0 place-items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current/25"
                     style={{ color: theme.node.muted, background: "transparent" }}
-                    aria-label="选择 Agent 执行权限"
+                    aria-label={`执行权限：${agentPermissionLabel(permissionMode)}，点击切换`}
+                    title={`执行权限：${agentPermissionLabel(permissionMode)}，点击切换`}
                 >
-                    <ShieldCheck className="size-3.5" style={{ color: permissionVisual.color }} />
-                    <span className="max-w-20 truncate">{agentPermissionLabel(permissionMode)}</span>
+                    <PermissionIcon className="size-3.5" style={{ color: permissionVisual.color }} aria-hidden="true" />
                 </button>
             </Dropdown>
             <button
@@ -1032,7 +1032,7 @@ function ComposerControls({
                 onClick={() => onSkillsOpenChange(true)}
             >
                 <Sparkles className="size-3.5" />
-                <span className="max-w-28 truncate">Skills技能包({selectedSkillCount})</span>
+                <span className="max-w-28 truncate">Skills({selectedSkillCount})</span>
             </button>
         </div>
     );

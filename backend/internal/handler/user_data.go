@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -294,8 +295,8 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 			return
 		}
 		if delivery.RedirectURL != "" {
-			// CDN 或对象存储直连地址允许安全短期缓存
-			c.Header("Cache-Control", "private, max-age=86400, stale-while-revalidate=3600")
+			// 签名链接仅有效 5 分钟；重定向缓存必须短于签名 TTL，避免命中过期地址。
+			c.Header("Cache-Control", "private, max-age=240")
 			c.Header("Referrer-Policy", "no-referrer")
 			c.Header("X-Content-Type-Options", "nosniff")
 			c.Redirect(http.StatusTemporaryRedirect, delivery.RedirectURL)
@@ -631,6 +632,58 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, gin.H{"project": project})
 	})
+	r.GET("/canvas-projects/:id/history", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		result, err := svc.CanvasHistory(user.ID, c.Param("id"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, result)
+	})
+	r.GET("/canvas-projects/:id/history/:snapshotId", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		snapshot, err := svc.CanvasHistorySnapshot(user.ID, c.Param("id"), c.Param("snapshotId"))
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"snapshot": snapshot, "project": json.RawMessage(snapshot.PayloadJSON)})
+	})
+	r.POST("/canvas-projects/:id/history/:snapshotId/restore", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		policy, available := loadRuntimePolicy(c, svc)
+		if !available || !enforceRateLimit(c, "canvas-write:"+user.ID, policy.Request.CanvasWritePerMinute, time.Minute) {
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024)
+		var req struct {
+			Revision *int64 `json:"revision"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, service.BadAuthRequest("恢复请求格式错误"))
+			return
+		}
+		project, err := svc.RestoreCanvasHistory(user.ID, c.Param("id"), c.Param("snapshotId"), req.Revision)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		log.Printf("canvas_restore request_id=%q trace_id=%q actor=%q canvas=%q snapshot=%q base_revision=%d revision=%d", RequestID(c), TraceID(c), user.ID, c.Param("id"), c.Param("snapshotId"), *req.Revision, project.Revision)
+		ok(c, gin.H{"project": project})
+	})
 	r.PUT("/canvas-projects/:id", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -656,7 +709,25 @@ func RegisterUserDataRoutes(r *gin.RouterGroup, svc *service.Service) {
 			fail(c, http.StatusBadRequest, service.BadAuthRequest("画布 ID 与请求路径不一致"))
 			return
 		}
+		var audit struct {
+			Revision    *int64            `json:"revision"`
+			Nodes       []json.RawMessage `json:"nodes"`
+			Connections []json.RawMessage `json:"connections"`
+		}
+		_ = json.Unmarshal(req.Project, &audit)
+		baseRevision := int64(-1)
+		if audit.Revision != nil {
+			baseRevision = *audit.Revision
+		}
 		project, err := svc.UpsertUserCanvasProject(user.ID, req.Project)
+		defer func() {
+			nodesBefore, nodesAfter := -1, len(audit.Nodes)
+			if project.SaveAudit != nil {
+				nodesBefore, nodesAfter = project.SaveAudit.NodesBefore, project.SaveAudit.NodesAfter
+			}
+			// Metadata only: never log prompts, media URLs, cookies, or the canvas payload.
+			log.Printf("canvas_save request_id=%q trace_id=%q actor=%q canvas=%q base_revision=%d revision=%d nodes_before=%d nodes_after=%d connections=%d status=%d", RequestID(c), TraceID(c), user.ID, identity.ID, baseRevision, project.Revision, nodesBefore, nodesAfter, len(audit.Connections), c.Writer.Status())
+		}()
 		if err != nil {
 			failService(c, err)
 			return

@@ -37,7 +37,11 @@ func (s *Service) finishCloudAgentCleanup(ctx context.Context, run *model.CloudA
 			return err
 		}
 		if task.Status == model.TaskStatusQueued || task.Status == model.TaskStatusRunning {
-			if _, err = s.CancelTask(ctx, run.UserID, id); err != nil {
+			source := model.TaskCancellationParentFailed
+			if run.Status == "cancelled" {
+				source = model.TaskCancellationParentCancelled
+			}
+			if _, err = s.taskLifecycle().cancelTaskWithIntent(ctx, run.UserID, id, model.TaskCancellationIntent{Source: source}); err != nil {
 				// Completion may win the cancellation race. Re-read rather than
 				// treating a truthful terminal result as a permanent cleanup error.
 				latest, readErr := s.repo.TaskForUser(run.UserID, id)
@@ -83,16 +87,23 @@ func (s *Service) finishCloudAgentCleanup(ctx context.Context, run *model.CloudA
 	defer s.storageMu.Unlock()
 	return s.repo.MutateCloudAgent(run.UserID, run.ID, run.Revision, func(current *model.CloudAgentExecution, repo *repository.Repository) error {
 		if mediaTask != nil {
-			if _, err := completeCloudAgentMediaNode(repo, run.UserID, canvasID, mediaTask, policy); err != nil {
+			targetNodeID := ""
+			if taskContext := taskClientContext(mediaTask.InputJSON); taskContext != nil {
+				targetNodeID = taskContext.NodeID
+			}
+			if _, err := completeCloudAgentMediaNode(repo, run.UserID, canvasID, targetNodeID, mediaTask, policy); err != nil {
 				var appErr *AppError
 				if !errors.Is(err, gorm.ErrRecordNotFound) && !(errors.As(err, &appErr) && (appErr.Status == 400 || appErr.Status == 409)) {
 					return err
 				}
-				current.FailureMessage = "生成节点已删除、被修改或结果不可用；任务结果保留在任务中心"
+				current.FailureMessage = cloudAgentSafeToolError(err) + "；任务记录保留在任务中心"
 			}
 		}
 		current.CleanupPending = false
 		current.ActiveTaskID, current.MediaTaskID = "", ""
+		if err := repo.ReleaseCloudAgentResourceLeasesByRun(run.UserID, run.ID); err != nil {
+			return err
+		}
 		return nil
 	})
 }
