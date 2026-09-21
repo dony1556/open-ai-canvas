@@ -827,12 +827,30 @@ func parseSkillPackageMetadata(data []byte) skillPackageMetadata {
 			}
 			paragraph = append(paragraph, trimmed)
 		}
-		metadata.Description = kernel.TruncateRunes(strings.Join(paragraph, " "), 500)
+		metadata.Description = strings.Join(paragraph, " ")
 	}
-	metadata.Name = kernel.TruncateRunes(strings.TrimSpace(metadata.Name), 80)
-	metadata.Description = kernel.TruncateRunes(strings.TrimSpace(metadata.Description), 500)
-	metadata.Version = kernel.TruncateRunes(strings.TrimSpace(metadata.Version), 64)
+	metadata.Name = truncateSkillMetadata(metadata.Name, 80)
+	metadata.Description = truncateSkillMetadata(metadata.Description, 500)
+	metadata.Version = truncateSkillMetadata(metadata.Version, 64)
 	return metadata
+}
+
+// truncateSkillMetadata keeps the result within the validation limit. The
+// general-purpose TruncateRunes helper appends "...", which is useful for
+// display snippets but would make a value exactly at the limit invalid.
+func truncateSkillMetadata(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 func yamlScalar(value string) string {

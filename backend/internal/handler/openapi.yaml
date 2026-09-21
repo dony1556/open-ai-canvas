@@ -26,6 +26,62 @@ tags:
   - name: agent
   - name: admin
 paths:
+  /tools:
+    get:
+      tags: [canvas]
+      summary: 列出可见且启用的生成工具
+      parameters:
+        - {in: query, name: scope, schema: {type: string, enum: [public, favorites, custom], default: public}}
+        - {in: query, name: type, schema: {type: string, enum: [style, motion, nine_grid, effect]}}
+        - {in: query, name: tag, schema: {type: string}}
+        - {in: query, name: search, schema: {type: string}}
+        - {in: query, name: page, schema: {type: integer, minimum: 1, default: 1}}
+        - {in: query, name: pageSize, schema: {type: integer, minimum: 1, maximum: 80, default: 20}}
+      responses:
+        "200": {description: "标准信封 data 为 tools（摘要不含 prompt/extraInfo）、totalCount、page、pageSize、hasMore"}
+        "401": {description: 未登录}
+    post:
+      tags: [canvas]
+      summary: 创建当前用户的工具
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ToolMutation'}
+      responses:
+        "200": {description: 标准信封 data 为完整工具}
+        "400": {description: 参数无效或预览资源不符合要求}
+        "401": {description: 未登录}
+  /tools/{id}:
+    parameters:
+      - {in: path, name: id, required: true, schema: {type: integer, format: int64, minimum: 1}}
+    get:
+      tags: [canvas]
+      summary: 查询可见且启用工具的完整详情
+      responses:
+        "200": {description: 标准信封 data 为完整工具，包含 prompt 和 extraInfo}
+        "404": {description: 工具不存在或不可见}
+    delete:
+      tags: [canvas]
+      summary: 删除自己的用户工具及关联收藏，不删除预览文件
+      responses:
+        "200": {description: "标准信封 data 为 {deleted: true}"}
+        "404": {description: 工具不存在或不能删除}
+  /tools/{id}/favorite:
+    parameters:
+      - {in: path, name: id, required: true, schema: {type: integer, format: int64, minimum: 1}}
+    post:
+      tags: [canvas]
+      summary: 幂等收藏可见工具
+      responses:
+        "200": {description: 标准信封 data 为完整工具和收藏状态}
+        "404": {description: 工具不存在或不可见}
+    delete:
+      tags: [canvas]
+      summary: 幂等取消收藏可见工具
+      responses:
+        "200": {description: 标准信封 data 为完整工具和收藏状态}
+        "404": {description: 工具不存在或不可见}
   /model-catalog:
     get:
       tags: [models]
@@ -85,6 +141,21 @@ paths:
                                     type: string
                                     maxLength: 80
                                     default: ""
+                                  tags:
+                                    type: array
+                                    maxItems: 5
+                                    description: 后台模型创建及更新使用同名字段；文字去除首尾空白且不能重复，空数组清除标签，仅用于展示。
+                                    items:
+                                      type: object
+                                      required: [text, color]
+                                      properties:
+                                        text:
+                                          type: string
+                                          minLength: 1
+                                          maxLength: 12
+                                        color:
+                                          type: string
+                                          enum: [purple, blue, green, gold, orange, pink]
                                   description:
                                     type: string
                                     maxLength: 500
@@ -971,6 +1042,20 @@ components:
       in: cookie
       name: open_ai_canvas_session
   schemas:
+    ToolMutation:
+      type: object
+      required: [type, label, prompt]
+      properties:
+        type: {type: string, enum: [style, motion, nine_grid, effect]}
+        label: {type: string, description: 名称最多 120 字节}
+        prompt: {type: string, description: 最多 8000 字节，不允许嵌套工具标签}
+        visibility: {type: string, enum: [private, public], default: private}
+        desc: {type: string}
+        tag: {type: string}
+        cover: {type: string, description: 本人已上传完成的资源 URL，仅限私有工具}
+        mediaUrl: {type: string, description: 本人已上传完成的资源 URL，仅限私有工具}
+        extraInfo: {type: array, items: {type: string}}
+        ratio: {type: string}
     ModelRequestIntent:
       type: object
       required: [capability]

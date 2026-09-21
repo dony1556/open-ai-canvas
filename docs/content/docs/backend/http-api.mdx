@@ -45,7 +45,9 @@ description: 信封、错误码与 OpenAPI
 
 `GET /model-catalog` 固定返回 `source=system`，直接查询所有启用系统渠道下的渠道模型，目录数据在 `channels[].models[]`，`models` 固定为空数组。不受逻辑模型开关影响，不反查逻辑模型或供应线路。每项的 `modelKey` 是调用标识，`displayName` 是模型展示名，`icon` 是模型图标键，`channelLabel` 是可选的渠道展示名（默认空字符串）。后台渠道模型创建与更新请求使用相同的 `channelLabel` 字段；服务端去除首尾空白并限制为 80 字，空字符串表示使用所属渠道名称。
 
-渠道模型创建、更新、管理列表、公开目录和会话模型价格信息均使用 `description` 表达模型描述。服务端去除首尾空白后限制为 500 字，允许空字符串清除描述；无管理员权限或超长内容拒绝保存。创作端二级选项在悬浮、聚焦或选中时展示该字段，长内容可悬浮查看完整文本；未填写的系统模型不按名称生成宣传文案。描述区域保留固定行高，悬浮不改变菜单项尺寸。
+渠道模型创建、更新、管理列表、公开目录和会话模型价格信息均使用 `description` 表达模型描述。服务端去除首尾空白后限制为 500 字，允许空字符串清除描述；无管理员权限或超长内容拒绝保存。创作端二级选项常驻展示该字段，不依赖悬浮 Tooltip；未填写的系统模型不按名称生成宣传文案。
+
+以上模型接口同时使用 `tags: [{ text, color }]` 传递有序展示标签，例如 `[{"text":"限时特价","color":"purple"},{"text":"官方1折","color":"gold"}]`。最多 5 个，文字去除首尾空白后为 1–12 字且不可重复；颜色仅接受 `purple`、`blue`、`green`、`gold`、`orange`、`pink`。创建/更新由管理员操作，非法标签拒绝整个保存；提交 `tags: []`（或省略字段）清空标签。用户模型选择器在对应二级渠道项中常驻展示，标签不参与路由、价格计算或权限判断。
 
 创作端跨渠道按模型 `displayName` 分组为一级菜单，二级菜单使用每条模型的 `channelLabel`，例如 `MiniMax H3 → 秘塔（满血渠道）`。选中值继续使用 `channelId::modelKey`，报价和生成请求保留该渠道身份。展示字段不参与路由、权限及计费。系统渠道的“前台名称/前台显示别名”已移除，管理 API 不再接受或返回 `publicAlias`。
 
@@ -146,6 +148,7 @@ Token 报价的 `estimated` 为 `true`，`quantity` 是预留 Token 数。参考
 - `generation_task_created` 携带 `canvasId`、`nodeId`、`taskId`、`title`、`mode`、`referenceNodeIds`。草稿、提交、画布工具写入，以及媒体成功 / 失败 / 取消的真实节点变更，均在画布写入与运行检查点的同一事务持久化 `canvas_updated`。节点已删除或换任务时不伪造更新；`run_failed` 本身不代表节点媒体任务失败。
 - 未注册 Agent 能力的节点不阻断整张画布读取：摘要和 `canvas_get_state` 仅返回基础信息，并标记 `agentSupported: false` 与原因；不暴露任意 metadata，不授予该类型的创建、修改、连线或媒体引用能力。
 - `approval.preview` 和 `canvas_updated.actions` 是服务端根据同一解析、快照与 Capability 规划流程生成的解释信息，不是授权凭证。审批卡片明确列出新增/修改节点、节点类型、修改字段、名称变化和连线两端；执行事件保存同样的可读信息，供历史消息显示和点击定位。实际写入仍重新校验用户归属、`snapshotHash`、Capability、节点锁、预算和审批 `callHash`。
+- 可纠正且尚未产生副作用的工具参数错误会在 `tool_failed` 的顶层及 `result.retry` 返回 `{ groupId, attempt, maxAttempts, status }`。`status=retrying` 表示 Agent 可按字段、schema 和示例自动纠正；同一工具累计三次仍失败时返回 `status=exhausted`，随后才产生 `run_failed(reason=tool_retry_exhausted)`。纠正成功的 `tool_completed` 返回同一 `groupId` 和 `status=recovered`。前端应按 `groupId` 折叠中间失败，不能将其显示为独立红色错误。权限、安全、存储错误以及已提交的收费生成任务不进入该重试流程。
 - `canvas_updated` 包含 `canvasId`、`operation`、`callId`、`actions`、可选的 `preview`/`text` 和 `canvasPatch`。`canvasPatch` 为 `{ canvasId, updatedAt, nodes: [{ before, after }], connections: [{ before, after }] }`；新增对象的 `before` 为 `null`，仅包含有变化的节点和连线。当前工具不开放删除。节点 action 保存操作、节点 ID、执行前标题、类型、修改字段和可选的修改后标题；引用 action 同时保存来源与目标节点 ID、标题和类型，不要求前端从内部 ID 猜测对象。`callId` 用于合并同一画布操作的工具完成消息。
 - 前端对增量按 40ms 窗口合批，三方合并远端基线、当前 Store 和编辑器，正常完成 / 失败无需全量 GET；保留无关节点编辑、拖动与视口，同字段冲突、删除或新任务绑定不强行覆盖。只有事件缺口、断流、增量冲突或没有增量的事件源需要全量校准，同一画布协调器最多每秒发起一次，单请求在途，期间重复通知合并为一次尾随校准。已识别增量协议后，相邻 `tool_failed` / `run_failed` 不重复触发整图刷新。
 - Agent 创建 / 续聊请求在客户端先持久化完整正文、幂等键、父运行和消息 ID，再提交；网络超时或响应丢失只允许用同一正文和 key 有界重放，不能换 key 生成新收费轮次。客户端区分“服务端已明确返回错误”和“未收到服务端确认”，不再把 HTTP 409/500 一律描述成请求未确认。待确认记录损坏时对话暂停发送，不把它当成“从未提交”。
@@ -243,3 +246,17 @@ CSV 使用中文表头、UTF-8 BOM、CRLF；金额按整数分精确转换为两
 模型错误把已有字符串码放进 `reason`（如 `model_capability_not_supported`），`code` 仍为 400。
 
 常量：后端 `service/error_codes.go`，前端 `web/src/services/api/error-codes.ts`。
+
+## 画布工具 API
+
+以下接口均要求登录，使用标准业务信封：
+
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| GET | `/api/tools` | 分页列表；`scope=public/favorites/custom`，默认 public；可按 `type=style/motion/nine_grid/effect`、tag、search 筛选。page 从 1 开始，pageSize 默认 20、最大 80；返回 tools、totalCount、page、pageSize、hasMore |
+| GET | `/api/tools/:id` | 可见且启用的工具详情，包含 prompt 和 extraInfo；列表不含这两个大字段 |
+| POST | `/api/tools` | 新建自己的工具；type、label、prompt 必填，visibility 默认 private；预览仅支持本人已上传完成的资源，公开工具暂不接受私人预览 |
+| POST / DELETE | `/api/tools/:id/favorite` | 幂等收藏 / 取消收藏，仅允许操作可见且启用工具 |
+| DELETE | `/api/tools/:id` | 仅删除自己的用户工具，不能删除内置或他人工具 |
+
+生成提示词工具引用格式为 `@[tool:type:ID:label:icon]`，label 使用 URI 编码。名称和图标只用于展示，不作为授权依据。服务端在任务入队及执行前检查用户可见性、启用状态、工具类型和生成模式；无效、越权、嵌套工具或数据库错误必须失败，不能把未解析 token 发送给模型。风格和九宫格仅用于图片，运镜和特效仅用于视频。入队校验不冻结工具快照：排队期间删除工具将导致执行失败。

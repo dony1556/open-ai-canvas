@@ -133,3 +133,11 @@ HTTP 请求 -> handler -> service（稳定导入面 / 别名）-> app（组合�
 - HTTP 参数与响应只在 handler 处理，业务规则进入 service。
 - 页面保留流程协调；可独立理解和测试的算法进入同业务域的 `lib`。
 - 新增功能时只更新本页的主要入口，不增加逐文件清单。
+
+## 画布工具链路
+
+- `backend/internal/handler/tools.go`：登录态工具列表、详情、收藏、创建与删除。
+- `internal/service` 别名 → `internal/app/tools_bridge.go`（资源归属校验）→ `internal/tools`（可见性策略、输入合同、token 展开和内置种子）→ `internal/repository/tools.go`。
+- 任务入队 `internal/app/task_creation.go` 与生成执行 `internal/app/provider.go` 共用严格 token 解析。
+- 前端 `canvas-tool-presentation.ts` 共享轻量展示配置，`canvas-resource-references.ts` 统一 token；节点提示词与工具面板共用同一持久状态，不复制到 metadata 风格字段。
+- `canvas-workspace-panel.tsx` 提供常驻左侧菜单，按需挂载节点、资产、工具、任务和历史面板；资产面板复用素材分页服务与画布插入合同；主分支项目章节侧栏与工作区互斥。
