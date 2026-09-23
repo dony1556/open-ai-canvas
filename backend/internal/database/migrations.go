@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 34
+const CurrentSchemaVersion int64 = 35
 
 const baselineSchemaChecksum = "sha256:open-ai-canvas-schema-v1-20260830"
 const schemaMigrationAppliedAtIndexChecksum = "sha256:schema-migrations-applied-at-index-v2-20260830"
@@ -117,6 +117,7 @@ var schemaMigrations = []migration{
 		}
 		return nil
 	}},
+	{version: 35, name: "auth_notification_schema", checksum: "sha256:auth-notification-schema-v35", apply: migrateAuthNotificationSchema},
 }
 
 func migrateChannelModelTags(tx *gorm.DB) error {
@@ -131,6 +132,33 @@ func migrateOAuthStateAcceptedTerms(tx *gorm.DB) error {
 		return nil
 	}
 	return tx.Migrator().AddColumn(&model.OAuthState{}, "AcceptedTerms")
+}
+
+// migrateAuthNotificationSchema 补齐 v1.5.7.1 漏写的迁移：
+// 上游把 SMSChannel / SMSRecord / AuthVerification / NotificationQuota 加进了 Models()，
+// 并给 User 增加了 Phone / EmailVerifiedAt / PhoneVerifiedAt 字段，但这些只对新装库生效
+// （v1 基线里的 AutoMigrate 已记录为 applied，存量库升级时不会重跑），
+// 导致存量库登录、获取认证设置等接口报 500：
+// column "phone" of relation "users" does not exist (SQLSTATE 42703)。
+// 这里按既有风格做幂等补齐：列用 HasColumn 判断逐条 AddColumn，新表用 AutoMigrate 建全。
+// users 表可能不存在（历史/局部 schema，见 migrations_test.go 的既有用例），
+// 因此加列的循环必须先用 HasTable 守卫，否则会报 "no such table: users"。
+func migrateAuthNotificationSchema(tx *gorm.DB) error {
+	if tx.Migrator().HasTable(&model.User{}) {
+		for _, field := range []string{"Phone", "EmailVerifiedAt", "PhoneVerifiedAt"} {
+			if !tx.Migrator().HasColumn(&model.User{}, field) {
+				if err := tx.Migrator().AddColumn(&model.User{}, field); err != nil {
+					return fmt.Errorf("增加 users.%s 列：%w", field, err)
+				}
+			}
+		}
+	}
+	for _, entity := range []any{&model.SMSChannel{}, &model.SMSRecord{}, &model.AuthVerification{}, &model.NotificationQuota{}} {
+		if err := tx.AutoMigrate(entity); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrateChannelCreditCost(tx *gorm.DB) error {
