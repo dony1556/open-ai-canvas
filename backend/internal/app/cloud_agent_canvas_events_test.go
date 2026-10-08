@@ -31,7 +31,7 @@ func TestCloudAgentCanvasPatchesPersistDraftSubmissionAndAllTerminalStates(t *te
 	for _, status := range []model.TaskStatus{model.TaskStatusSucceeded, model.TaskStatusFailed, model.TaskStatusCancelled} {
 		t.Run(string(status), func(t *testing.T) {
 			s, db, args := agentMediaFixture(t)
-			run, _ := agentMediaRun(t, s, args, "auto")
+			run, _ := agentMediaRun(t, s, args, "request_approval")
 			if err := s.advanceCloudAgentByID("user", run.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +128,7 @@ func TestCloudAgentCanvasPatchesPersistDraftSubmissionAndAllTerminalStates(t *te
 
 func TestCloudAgentMediaImageSourceHasActionableCorrection(t *testing.T) {
 	s, _, args := agentMediaFixture(t)
-	run, state := agentMediaRun(t, s, args, "auto")
+	run, state := agentMediaRun(t, s, args, "request_approval")
 	args.SourceNodeID = "cat"
 	if _, _, err := s.prepareCloudAgentMedia(run, &state, agentMediaCall(args)); err == nil || !strings.Contains(err.Error(), "referenceNodeIds") {
 		t.Fatalf("image source must point to the correct field: %v", err)
@@ -193,6 +193,38 @@ func TestCloudAgentCanvasOperationTraceSharesToolCallID(t *testing.T) {
 	if trace["callId"] != call.ID || last.Type != "tool_completed" || last.Payload["callId"] != call.ID {
 		t.Fatalf("canvas delta and tool result cannot be deduplicated: %+v / %+v", trace, last)
 	}
+	result := last.Payload["result"].(map[string]any)
+	if result["committed"] != true {
+		t.Fatalf("canvas_apply_ops result did not acknowledge persistence: %+v", result)
+	}
+	preview := result["preview"].(map[string]any)
+	if preview["status"] != "applied" || strings.Contains(stringValue(preview["description"]), "批准后才会写入") {
+		t.Fatalf("canvas_apply_ops result still looks like an approval preview: %+v", preview)
+	}
+	canvas, err := s.repo.CanvasProjectForUser("user", "agent-canvas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := creationDocument(canvas.PayloadJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cat map[string]any
+	for _, node := range creationMaps(doc["nodes"]) {
+		if stringValue(node["id"]) == "cat" {
+			cat = node
+			break
+		}
+	}
+	if cat == nil || stringValue(cat["title"]) != "叮当猫飞行参考" {
+		t.Fatalf("canvas_apply_ops did not persist the requested prompt contract: %+v", cat)
+	}
+	metadata := cat["metadata"].(map[string]any)
+	generationSpec := metadata["generationSpec"].(map[string]any)
+	if stringValue(generationSpec["prompt"]) != "下一版参考图提示词" {
+		t.Fatalf("canvas_apply_ops did not persist the requested prompt contract: %+v", cat)
+	}
+
 	actions := creationMaps(trace["actions"])
 	byActionAndNode := map[string]map[string]any{}
 	for _, action := range actions {
@@ -211,7 +243,7 @@ func TestCloudAgentCanvasOperationTraceSharesToolCallID(t *testing.T) {
 			fieldValues = append(fieldValues, stringValue(field))
 		}
 	}
-	if len(fieldValues) != 2 || fieldValues[0] != "节点名称" || fieldValues[1] != "下一版提示词" {
+	if len(fieldValues) != 2 || fieldValues[0] != "节点名称" || fieldValues[1] != "提示词" {
 		t.Fatalf("canvas operation trace lost updated fields: %+v", updated)
 	}
 	created := byActionAndNode["created:trace-video"]
@@ -226,7 +258,7 @@ func TestCloudAgentCanvasOperationTraceSharesToolCallID(t *testing.T) {
 
 func TestCloudAgentMissingCanvasStillCheckpointsMediaFailure(t *testing.T) {
 	s, db, args := agentMediaFixture(t)
-	run, _ := agentMediaRun(t, s, args, "auto")
+	run, _ := agentMediaRun(t, s, args, "request_approval")
 	if err := s.advanceCloudAgentByID("user", run.ID); err != nil {
 		t.Fatal(err)
 	}

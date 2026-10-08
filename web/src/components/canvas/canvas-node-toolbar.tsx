@@ -13,7 +13,10 @@ import type { ImageSplitParams } from "@/lib/canvas/canvas-image-data";
 import { formatBytes, getDataUrlByteSize } from "@/lib/image-utils";
 import { generationErrorMessage } from "@/lib/generation-error";
 import { useCopyText } from "@/hooks/use-copy-text";
+import { producedModelLabel } from "@/lib/canvas/produced-model";
+import { nodeGenerationPrompt } from "@/lib/canvas/generation-contract";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
+import { useEffectiveConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasNodeData, type CanvasNodeMetadata, type CanvasWorkspaceMode, type ViewportTransform } from "@/types/canvas";
 import { buildImageToolbarTools } from "./canvas-image-toolbar-tools";
 import { CanvasGridSplitPicker } from "./canvas-grid-split-picker";
@@ -224,7 +227,7 @@ export function CanvasNodeToolbar({
     const isAudio = node.type === CanvasNodeType.Audio;
     const hasImage = isImage && Boolean(node.metadata?.content);
     const copyImagePrompt = (target: CanvasNodeData) => {
-        const prompt = target.metadata?.prompt?.trim();
+        const prompt = nodeGenerationPrompt(target).trim();
         if (!prompt) {
             message.warning("暂无可复制的提示词");
             return;
@@ -499,6 +502,7 @@ function NodeDockMenuButton({ menuId, label, icon, tools, openMenuId, onOpenChan
 
 export function CanvasNodeInfoModal({ node, open, onClose, onMetadataChange, readOnly = false, onUnauthorized }: { node: CanvasNodeData | null; open: boolean; onClose: () => void; onMetadataChange?: (nodeId: string, metadata: Partial<CanvasNodeMetadata>) => void; readOnly?: boolean; onUnauthorized?: () => void }) {
     const theme = canvasThemes[useActiveTheme()];
+    const config = useEffectiveConfig();
     const [assetTags, setAssetTags] = useState<string[]>([]);
     const [assetTagInput, setAssetTagInput] = useState("");
     const [assetCategory, setAssetCategory] = useState<CanvasAssetCategory>("other");
@@ -585,18 +589,18 @@ export function CanvasNodeInfoModal({ node, open, onClose, onMetadataChange, rea
                                 </section>
                             ) : null}
 
-                            {node.metadata?.prompt ? (
+                            {nodeGenerationPrompt(node) ? (
                                 <section className="canvas-node-inspector-section">
                                     <div className="canvas-node-inspector-section-heading"><span>提示词</span></div>
-                                    <div className="canvas-node-inspector-copy canvas-node-inspector-prompt">{node.metadata.prompt}</div>
+                                    <div className="canvas-node-inspector-copy canvas-node-inspector-prompt">{nodeGenerationPrompt(node)}</div>
                                 </section>
                             ) : null}
 
-                            {nodeGenerationRows(node).length ? (
+                            {nodeGenerationRows(node, producedModelLabel(config, node.metadata?.producedModel)).length ? (
                                 <section className="canvas-node-inspector-section">
                                     <div className="canvas-node-inspector-section-heading"><span>生成信息</span></div>
                                     <div className="canvas-node-inspector-facts">
-                                        {nodeGenerationRows(node).map((item) => <InfoRow key={item.label} label={item.label} value={item.value} />)}
+                                        {nodeGenerationRows(node, producedModelLabel(config, node.metadata?.producedModel)).map((item) => <InfoRow key={item.label} label={item.label} value={item.value} />)}
                                     </div>
                                 </section>
                             ) : null}
@@ -668,7 +672,7 @@ function InfoRow({ label, value }: { label: string; value: ReactNode }) {
     );
 }
 
-function nodeGenerationRows(node: CanvasNodeData) {
+function nodeGenerationRows(node: CanvasNodeData, producedModelText: string) {
     const metadata = node.metadata;
     if (!metadata) return [] as Array<{ label: string; value: string }>;
     const rows: Array<{ label: string; value: string }> = [];
@@ -689,7 +693,7 @@ function nodeGenerationRows(node: CanvasNodeData) {
         add("耗时", minutes ? `${minutes}分 ${seconds}秒` : `${seconds}秒`);
     };
 
-    add("模型", metadata.model);
+    add("产出模型", producedModelText);
     add("生成尺寸", metadata.size);
     add("分辨率", metadata.vquality || metadata.quality);
     add("秒数", metadata.seconds ? `${metadata.seconds} 秒` : undefined);

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -254,6 +255,12 @@ func (s *Service) CreateProject(userID string, req CreateProjectRequest) (model.
 	}
 	project := model.Project{ID: newID(), UserID: userID, Name: name, Type: projectType, AspectRatio: aspectRatio, SourceType: sourceType, Description: strings.TrimSpace(req.Description), StylePresetID: stylePresetID, StyleProfileJSON: styleProfileJSON, DefaultImageModel: defaultImageModel, DefaultVideoModel: defaultVideoModel, Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := s.repo.CreateProject(&project); err != nil {
+		if errors.Is(err, repository.ErrProjectNameConflict) {
+			// 项目名称冲突需要明确返回 409，页面才能按已有逻辑换一个名称重试。
+			conflict := NewAppError(http.StatusConflict, "项目名称已存在")
+			conflict.Reason = ReasonProjectNameConflict
+			return model.Project{}, conflict
+		}
 		return model.Project{}, err
 	}
 	if _, err := s.createProjectWorkflow(project.ID, "", "project"); err != nil {
@@ -503,9 +510,12 @@ func newProjectUnit(projectID string, req CreateProjectUnitRequest, position int
 	if kind != model.ProjectUnitKindChapter && kind != model.ProjectUnitKindEpisode {
 		return model.ProjectUnit{}, BadAuthRequest("不支持的项目单元类型")
 	}
-	title := strings.TrimSpace(req.Title)
+	title := model.NormalizeProjectUnitTitle(req.Title)
 	if title == "" {
 		return model.ProjectUnit{}, BadAuthRequest("章节标题不能为空")
+	}
+	if !model.ValidProjectUnitTitle(title) {
+		return model.ProjectUnit{}, BadAuthRequest("章节标题不能超过 240 个字符")
 	}
 	if position < 0 {
 		position = 0
@@ -524,7 +534,10 @@ func (s *Service) UpdateProjectUnit(userID string, projectID string, unitID stri
 		return model.ProjectUnit{}, err
 	}
 	sourceChanged := unit.SourceText != req.SourceText
-	if title := strings.TrimSpace(req.Title); title != "" {
+	if title := model.NormalizeProjectUnitTitle(req.Title); title != "" {
+		if !model.ValidProjectUnitTitle(title) {
+			return model.ProjectUnit{}, BadAuthRequest("章节标题不能超过 240 个字符")
+		}
 		unit.Title = title
 	}
 	unit.SourceText = req.SourceText

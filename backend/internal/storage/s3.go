@@ -16,7 +16,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
+	awsv4 "github.com/aws/aws-sdk-go/aws/signer/v4"
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
 )
 
@@ -76,7 +78,8 @@ func NewS3Client(setting Settings, timeout time.Duration) (*awss3.S3, error) {
 }
 
 func PutS3Object(setting Settings, objectKey string, mimeType string, size int64, body io.Reader) (string, error) {
-	client, err := NewS3Client(setting, 2*time.Minute)
+	setting = NormalizeSettings(setting)
+	client, err := NewS3Client(setting, transferTimeout(setting))
 	if err != nil {
 		return "", err
 	}
@@ -84,9 +87,9 @@ func PutS3Object(setting Settings, objectKey string, mimeType string, size int64
 	if reader, ok := body.(io.ReadSeeker); ok {
 		seekable = reader
 	} else {
-		limit := size + 1
-		if limit <= 0 {
-			limit = 64 << 20
+		limit := maxBufferedUploadSize(setting) + 1
+		if size >= 0 && size < limit {
+			limit = size + 1
 		}
 		data, readErr := io.ReadAll(io.LimitReader(body, limit))
 		if readErr != nil {
@@ -112,7 +115,8 @@ func PutS3Object(setting Settings, objectKey string, mimeType string, size int64
 }
 
 func GetS3ObjectRange(setting Settings, objectKey string, rangeHeader string) (*ObjectStream, error) {
-	client, err := NewS3Client(setting, 2*time.Minute)
+	setting = NormalizeSettings(setting)
+	client, err := NewS3Client(setting, transferTimeout(setting))
 	if err != nil {
 		return nil, err
 	}
@@ -135,16 +139,33 @@ func GetS3ObjectRange(setting Settings, objectKey string, rangeHeader string) (*
 }
 
 func SignedS3ObjectURL(setting Settings, objectKey string, expiresAt time.Time) (string, error) {
-	client, err := NewS3Client(setting, 2*time.Minute)
+	return signedS3ObjectURL(setting, objectKey, objectURLSigning{ExpiresAt: expiresAt})
+}
+
+func signedS3ObjectURL(setting Settings, objectKey string, signing objectURLSigning) (string, error) {
+	setting = NormalizeSettings(setting)
+	client, err := NewS3Client(setting, transferTimeout(setting))
 	if err != nil {
 		return "", err
 	}
-	duration := time.Until(expiresAt)
-	if duration <= 0 {
+	if !signing.ExpiresAt.After(time.Now()) {
 		return "", errors.New("S3 签名有效期必须晚于当前时间")
 	}
-	req, _ := client.GetObjectRequest(&awss3.GetObjectInput{Bucket: aws.String(setting.Bucket), Key: aws.String(strings.TrimLeft(objectKey, "/"))})
-	value, err := req.Presign(duration)
+	input := &awss3.GetObjectInput{Bucket: aws.String(setting.Bucket), Key: aws.String(strings.TrimLeft(objectKey, "/"))}
+	if signing.CacheControl != "" {
+		input.ResponseCacheControl = aws.String(signing.CacheControl)
+	}
+	if signing.ContentDisposition != "" {
+		input.ResponseContentDisposition = aws.String(signing.ContentDisposition)
+	}
+	req, _ := client.GetObjectRequest(input)
+	signedAt := signingTime(signing.SignedAt)
+	// SDK 默认以 time.Now 作为 X-Amz-Date；替换为对齐后的签名时间，保证同一窗口内地址稳定。
+	// DisableURIPathEscaping 与 SDK 为 S3 注册的默认签名器保持一致。
+	req.Handlers.Sign.Swap(awsv4.SignRequestHandler.Name, request.NamedHandler{Name: awsv4.SignRequestHandler.Name, Fn: func(r *request.Request) {
+		awsv4.SignSDKRequestWithCurrentTime(r, func() time.Time { return signedAt }, func(s *awsv4.Signer) { s.DisableURIPathEscaping = true })
+	}})
+	value, err := req.Presign(signing.ExpiresAt.Sub(signedAt))
 	if err != nil {
 		return "", fmt.Errorf("S3 下载地址签名失败：%w", err)
 	}
@@ -152,7 +173,8 @@ func SignedS3ObjectURL(setting Settings, objectKey string, expiresAt time.Time) 
 }
 
 func DeleteS3Object(setting Settings, objectKey string) error {
-	client, err := NewS3Client(setting, 2*time.Minute)
+	setting = NormalizeSettings(setting)
+	client, err := NewS3Client(setting, transferTimeout(setting))
 	if err != nil {
 		return err
 	}

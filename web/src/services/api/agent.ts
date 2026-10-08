@@ -27,7 +27,7 @@ export type AgentProfileView = {
     layers: AgentProfileLayer[];
 };
 
-export type AgentApprovalPreviewOperation = "add_node" | "update_node" | "connect_nodes" | "arrange_nodes" | "generate_media" | "create_storyboard" | "edit_storyboard" | "plan_step";
+export type AgentApprovalPreviewOperation = "add_node" | "update_node" | "connect_nodes" | "arrange_nodes" | "generate_media" | "create_storyboard" | "edit_storyboard" | "create_character" | "plan_step";
 
 export type AgentApprovalPreviewItem = {
     operation: AgentApprovalPreviewOperation;
@@ -112,6 +112,7 @@ export type CreateAgentRunInput = {
     channelId?: string;
     channelModelKey?: string;
     skillIds?: string[];
+    focusNodeIds?: string[];
     permissionMode?: AgentPermissionMode;
     contextScope?: string[];
     budget?: { maxCredits?: number; maxGenerationTasks?: number; maxVideoSeconds?: number; maxSteps?: number };

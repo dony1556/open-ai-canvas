@@ -2,6 +2,8 @@ import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { App } from "antd";
 
 import { buildNodeGenerationContext, hydrateNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
+import { nodeGenerationPrompt } from "@/lib/canvas/generation-contract";
+import { producedModelCandidateForGeneration } from "@/lib/canvas/produced-model";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import { buildEmotionImageArtifacts, emotionGenerationSize, emotionProviderMask, normalizeEmotionPromptForProvider, resolveEmotionEditPlan } from "@/lib/canvas/canvas-emotion";
 import {
@@ -131,7 +133,7 @@ export function useCanvasGenerationRetry({
                 return;
             }
 
-            const retryPromptSource = sourceNode.metadata?.composerContent || sourceNode.metadata?.prompt || node.metadata?.prompt || "";
+            const retryPromptSource = nodeGenerationPrompt(sourceNode) || nodeGenerationPrompt(node);
             const retryContextPrompt = retryMode === "image" && sourceNode.metadata?.portraitTexture ? buildPortraitTexturePrompt(retryPromptSource, sourceNode.metadata.portraitTexture) : retryPromptSource;
             if (unchangedModeratedPrompt(node.metadata, retryPromptSource)) {
                 message.warning("该提示词未通过内容审核，请先修改提示词再重新生成");
@@ -289,6 +291,7 @@ export function useCanvasGenerationRetry({
                                           ...item.metadata,
                                           prompt: mediaPrompt,
                                           model: generationConfig.model,
+                                          producedModelCandidate: producedModelCandidateForGeneration(generationConfig),
                                           size: generationConfig.size,
                                           seconds: generationConfig.videoSeconds,
                                           vquality: generationConfig.vquality,
@@ -388,6 +391,7 @@ export function useCanvasGenerationRetry({
                     ? {
                           generationType: savedImageMetadata.generationType,
                           model: generationConfig.model,
+                          producedModelCandidate: producedModelCandidateForGeneration(generationConfig),
                           size: generationConfig.size,
                           quality: generationConfig.quality,
                           transparentBackground: generationConfig.transparentBackground,

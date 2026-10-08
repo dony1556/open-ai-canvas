@@ -242,7 +242,7 @@ func (s *Service) CompleteLinuxDOLogin(stateValue string, code string) (*LinuxDO
 			return nil, kernel.Forbidden("管理员未开放新用户注册")
 		}
 		if !state.AcceptedTerms {
-			return nil, kernel.BadAuthRequest("请先同意影策服务协议")
+			return nil, kernel.BadAuthRequest("请先同意" + s.AgreementTitleForMessage())
 		}
 		user, identity, err = s.createLinuxDOUser(subject, providerUsername, displayName, profileString(profile, setting.EmailField), avatarURL)
 		if err != nil {
@@ -263,7 +263,7 @@ func (s *Service) CompleteLinuxDOLogin(stateValue string, code string) (*LinuxDO
 	now := time.Now()
 	user.LastLoginAt = &now
 	user.UpdatedAt = now
-	if err := s.repo.Save(user); err != nil {
+	if err := s.repo.UpdateUserLoginTime(user.ID, now); err != nil {
 		return nil, err
 	}
 	s.host.RecordActivity(user.ID, "login", 1)

@@ -22,15 +22,16 @@ const (
 	cloudAgentToolErrorStateConflict      = "state_conflict"
 	cloudAgentToolErrorPermission         = "permission_violation"
 	cloudAgentToolErrorUpstream           = "upstream_failure"
+	cloudAgentToolErrorAdmission          = "admission_failure"
+	cloudAgentToolErrorApprovalDeferred   = "approval_deferred"
 	cloudAgentToolErrorUnknown            = "tool_error"
 )
 
 // cloudAgentToolErrorClass 返回 (errorClass, retryable, requiredAction)。
 //
-// requiredAction 是给模型/界面看的"下一步该做什么"，取稳定的短标识，不写自然语言：
-// fix_arguments（按 schema 改参数后重试）、reread_canvas（重读画布再试）、
-// use_advertised_tools（只使用本轮工具表里列出的工具）、ask_user（权限被拒，别自己绕）、
-// report_to_user（上游故障，告诉用户）。
+// requiredAction 是给模型/界面看的"下一步该做什么"，取稳定的短标识：
+// fix_arguments（按 schema 改参数后重试）、reread_canvas（重读画布再试）、retry（临时故障自动重试）、
+// use_advertised_tools（只使用本轮工具表里列出的工具）、ask_user（权限被拒，别自己绕）、report_to_user（上游故障，告诉用户）。
 func cloudAgentToolErrorClass(req CloudAgentRequest, call cloudAgentCall, err error, allowed bool) (string, bool, string) {
 	if err == nil {
 		return "", true, ""
@@ -62,11 +63,17 @@ func cloudAgentToolErrorClass(req CloudAgentRequest, call cloudAgentCall, err er
 	}
 	var admissionErr *cloudAgentMediaAdmissionError
 	if errors.As(err, &admissionErr) {
-		// 媒体准入里"上游拒绝该规格"属于上游故障；其余是参数/状态问题。
-		if strings.Contains(admissionErr.Error(), "上游") {
-			return cloudAgentToolErrorUpstream, false, "report_to_user"
+		if admissionErr.ErrorClass != "" {
+			retryable, action := admissionErr.Retryable, admissionErr.RequiredAction
+			if action == "" {
+				action = "report_to_user"
+			}
+			return admissionErr.ErrorClass, retryable, action
 		}
-		return cloudAgentToolErrorSchemaError, true, "fix_arguments"
+		if admissionErr.Reason == "snapshot_conflict" {
+			return cloudAgentToolErrorStateConflict, true, "reread_canvas"
+		}
+		return cloudAgentToolErrorAdmission, false, "report_to_user"
 	}
 	var httpErr providerHTTPError
 	if errors.As(err, &httpErr) {
@@ -79,7 +86,10 @@ func cloudAgentToolErrorClass(req CloudAgentRequest, call cloudAgentCall, err er
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return cloudAgentToolErrorUpstream, true, "report_to_user"
 	}
-	return cloudAgentToolErrorUnknown, true, ""
+	// Unknown failures are not evidence that another model-generated argument
+	// will work. Never advertise them as retryable; the caller must report the
+	// failure instead of starting an unbounded variant loop.
+	return cloudAgentToolErrorUnknown, false, "report_to_user"
 }
 
 // cloudAgentPlatformToolNames 是平台支持的工具全集（含只在特定条件下暴露的工具）。
@@ -104,6 +114,10 @@ func cloudAgentToolErrorLabel(class string) string {
 		return "超出本轮权限"
 	case cloudAgentToolErrorUpstream:
 		return "上游故障"
+	case cloudAgentToolErrorAdmission:
+		return "媒体生成准入失败"
+	case cloudAgentToolErrorApprovalDeferred:
+		return "审批暂停未执行"
 	default:
 		return "工具执行失败"
 	}

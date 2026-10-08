@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-var ErrNotificationLimit = errors.New("notification limit reached")
-var ErrVerificationInvalid = errors.New("verification expired, changed or consumed")
-var ErrChannelConflict = errors.New("sms channel changed")
+var ErrNotificationLimit = errors.New("通知发送次数已达上限，请稍后再试")
+var ErrVerificationInvalid = errors.New("验证码已过期或已使用，请重新获取")
+var ErrChannelConflict = errors.New("短信通道配置已变化，请重新获取验证码")
 
 func (r *Repository) AttemptLegacyEmailVerification(id string) error {
 	result := r.db.Model(&model.EmailVerificationCode{}).Where("id = ? AND attempts < 5 AND used_at IS NULL AND expires_at > ?", id, time.Now()).Update("attempts", gorm.Expr("attempts + 1"))
@@ -97,6 +97,12 @@ func consumeVerification(tx *gorm.DB, id string, now time.Time) error {
 }
 func (r *Repository) CreateUserWithVerification(user *model.User, id string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := lockRegistrationEmail(tx, user.Email); err != nil {
+			return err
+		}
+		if err := New(tx).CheckEmailAvailable(user.Email, ""); err != nil {
+			return err
+		}
 		if err := consumeVerification(tx, id, time.Now()); err != nil {
 			return err
 		}
@@ -106,6 +112,14 @@ func (r *Repository) CreateUserWithVerification(user *model.User, id string) err
 func (r *Repository) CompleteAuthVerification(v *model.AuthVerification, bind bool) (*model.User, error) {
 	var user model.User
 	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if bind && v.Email != "" {
+			if err := lockRegistrationEmail(tx, v.Email); err != nil {
+				return err
+			}
+			if err := New(tx).CheckEmailAvailable(v.Email, v.UserID); err != nil {
+				return err
+			}
+		}
 		now := time.Now()
 		if err := consumeVerification(tx, v.ID, now); err != nil {
 			return err

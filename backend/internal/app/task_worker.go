@@ -34,29 +34,24 @@ func (s *Service) taskWorker() *taskWorkerCoordinator {
 	return newTaskWorkerCoordinator(s)
 }
 
+// wakeTaskDispatcher lets newly persisted work enter execution immediately;
+// the periodic scan remains the cross-process and missed-notification recovery path.
+func (s *Service) wakeTaskDispatcher() {
+	if s == nil || s.taskDispatcherWake == nil {
+		return
+	}
+	select {
+	case s.taskDispatcherWake <- struct{}{}:
+	default:
+	}
+}
+
 func (w *taskWorkerCoordinator) start(ctx context.Context) {
 	s := w.service
 	s.startTextReplayCleanup(ctx)
 	s.startProviderCancellationReconciliation(ctx)
 	s.startBillingReviewAudit(ctx)
 	s.startAgentMemoryCompactScheduler()
-	s.runWorkerLoop(func(ctx context.Context) {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-			if !s.IsDraining() {
-				s.advanceCloudAgents()
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	})
 	s.runWorkerLoop(func(ctx context.Context) {
 		slots := make(chan struct{}, maxChannelConcurrencyLimit)
 		dispatch := func() {
@@ -90,7 +85,11 @@ func (w *taskWorkerCoordinator) start(ctx context.Context) {
 				}
 				slots <- struct{}{}
 				started := s.runWorkerTask(func() {
-					defer func() { <-slots; globalSlot.Release() }()
+					defer func() {
+						<-slots
+						globalSlot.Release()
+						s.wakeTaskDispatcher()
+					}()
 					if err := w.processClaimedTask(task, globalSlot); err != nil {
 						_ = s.log(task.UserID, task.ID, "error", "后台任务处理失败", err.Error())
 					}
@@ -111,6 +110,8 @@ func (w *taskWorkerCoordinator) start(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-s.taskDispatcherWake:
+				dispatch()
 			case <-ticker.C:
 				dispatch()
 			}
@@ -190,13 +191,41 @@ func (w *taskWorkerCoordinator) processClaimedTask(task *model.Task, globalSlot 
 		return s.finishTaskMediaRecovery(task, result, recoveryErr)
 	}
 
+	// Creation and manual retry admission can precede execution by a long time.
+	// Re-read the feature policy before preparing or dispatching a model route.
+	decryptedInput, err := s.decryptTaskInputJSON(task.InputJSON)
+	if err != nil {
+		return err
+	}
+	var admissionInput map[string]any
+	if err := json.Unmarshal([]byte(decryptedInput), &admissionInput); err != nil {
+		return err
+	}
+	if err := s.requireCustomChannelsForTaskInput(admissionInput); err != nil {
+		// A reclaimed task may already have submitted upstream. Keep the existing
+		// review path for that evidence; only an unsent reservation is refundable.
+		attempts, readErr := s.repo.RouteAttempts(task.ID, task.RouteRun)
+		uncertain := readErr != nil || task.ProviderRequestID != "" || s.taskBilling().BillingFailureRequiresReview(task.BillingOrderID, task.ID, err)
+		for _, attempt := range attempts {
+			if attempt.DispatchState == "accepted" || attempt.DispatchState == "submission_unknown" {
+				uncertain = true
+			}
+		}
+		// Legacy tasks without an explicit new retry run retain their conservative
+		// submission handling, as in createDirectTaskAttempt.
+		if len(attempts) == 0 && task.RouteRun <= 1 && task.Attempts > 1 {
+			uncertain = true
+		}
+		return terminal.markPreparationFailure(task, "渠道不可用", errors.Join(err, readErr), uncertain, "自定义渠道已关闭，上游请求未发出")
+	}
+
 	s.markAgentMemoryCompactRunning(*task)
 	task.Stage = "调用生成模型"
 	task.Progress = 35
 	if taskUsesUpstreamReportedProgress(task.Type) {
 		// 图片/视频百分比只能来自供应商状态响应。连接和提交阶段只展示文案，
 		// 不能再用统一的 35% 冒充真实生成进度。
-		task.Stage = "正在连接上游"
+		task.Stage = "作品创作中"
 		task.Progress = 0
 	}
 	if err := s.repo.UpdateTaskProgressForLease(task.ID, task.LeaseOwner, task.Stage, task.Progress); err != nil {
@@ -316,7 +345,11 @@ func taskFailureMessage(err error) string {
 	if err == nil {
 		return "任务处理失败"
 	}
-	return truncateRunes(err.Error(), 2_000)
+	message := err.Error()
+	if denied := speechResourceDeniedUserMessage(message); denied != "" {
+		return denied
+	}
+	return truncateRunes(message, 2_000)
 }
 
 // taskLeaseRenewContext 给续租单独一份"不继承父 context 取消/时限"的上下文（仅 5 秒上限）。

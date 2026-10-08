@@ -194,6 +194,7 @@ export function useCanvasUpload({
                 metadata: {
                     ...currentNode.metadata, ...metadata,
                     fileUpload: undefined, fileUploadProgress: undefined, errorDetails: undefined,
+                    producedModel: undefined, producedModelCandidate: undefined,
                     ...(replaceId ? {
                         assetId: undefined, taskId: undefined, freeResize: false,
                         isBatchRoot: undefined, batchRootId: undefined, batchChildIds: undefined,
@@ -648,8 +649,9 @@ export function useCanvasUpload({
 
     const createAssetPayloadNode = useCallback(async (payload: InsertAssetPayload, center: Position) => {
         if (payload.kind === "character") {
-            const width = 320;
-            const height = 260;
+            // 角色卡是竖版海报式主视觉，默认用 3:4 竖幅。
+            const width = 264;
+            const height = 352;
             return {
                 id: `character-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                 type: CanvasNodeType.Text,

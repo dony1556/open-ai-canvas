@@ -138,6 +138,10 @@ export type StoryboardRow = {
     videoNodeId?: string;
     status?: CanvasNodeStatus;
     errorDetails?: string;
+    /** 与该分镜行关联的预演台场景 ID。由 Agent 或用户创建预演后写入。 */
+    previsSceneId?: string;
+    /** 最后一次生成白膜预演后的缩略图 URL，用于在分镜行内展示预览图。 */
+    previsSnapshotUrl?: string;
 };
 
 export type StoryboardData = {
@@ -272,7 +276,12 @@ export type CanvasNodeMetadata = {
     fontSize?: number;
     generationMode?: CanvasGenerationMode;
     generationType?: CanvasImageGenerationType;
+    /** 选用模型：下一次生成将使用的模型，随提示词面板下拉变化。 */
     model?: string;
+    /** 产出模型：当前图片、视频或音频内容生成成功时冻结的模型身份。 */
+    producedModel?: string;
+    /** 本次生成已提交、尚未成功落盘的模型身份。失败或改下拉都不改产出模型。 */
+    producedModelCandidate?: string;
     workflowProvider?: "model" | "runninghub";
     runningHubWorkflowId?: string;
     runningHubWorkflowKind?: "workflow" | "app";
@@ -290,7 +299,19 @@ export type CanvasNodeMetadata = {
     audioVoice?: string;
     audioFormat?: string;
     audioSpeed?: string;
+    audioLanguage?: string;
+    audioDialect?: string;
     audioInstructions?: string;
+    audioEmotionControlMethod?: string;
+    audioEmotionRandom?: string;
+    audioEmotionHappy?: string;
+    audioEmotionAngry?: string;
+    audioEmotionSad?: string;
+    audioEmotionAfraid?: string;
+    audioEmotionDisgusted?: string;
+    audioEmotionMelancholic?: string;
+    audioEmotionSurprised?: string;
+    audioEmotionCalm?: string;
     references?: string[];
     naturalWidth?: number;
     naturalHeight?: number;
@@ -373,6 +394,7 @@ export type CanvasNodeMetadata = {
     taskCreatedAt?: string;
     taskUpdatedAt?: string;
     generationEffectKeys?: string[];
+    generationOutputCount?: number;
     agentGenerationContinuation?: {
         id: string;
         taskId: string;
@@ -396,12 +418,12 @@ export type CanvasNodeMetadata = {
     versionPrimary?: boolean;
     copiedFromNodeId?: string;
     generationResultPlacement?: "replace-node" | "new-version";
-    directorSceneId?: string;
-    directorShotId?: string;
-    directorPreviewNodeId?: string;
-    directorDepthNodeId?: string;
-    directorNormalNodeId?: string;
-    directorClayVideoNodeId?: string;
+    previsSceneId?: string;
+    previsShotId?: string;
+    previsPreviewNodeId?: string;
+    previsDepthNodeId?: string;
+    previsNormalNodeId?: string;
+    previsClayVideoNodeId?: string;
     subtitleEntries?: SrtEntry[];
     subtitleHighlights?: SubtitleHighlight[];
     subtitleStyle?: SubtitleStyle;

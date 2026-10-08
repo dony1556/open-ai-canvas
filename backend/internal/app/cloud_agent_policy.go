@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	cloudAgentCompilerVersion  = "cloud-agent-policy-compiler/v4"
+	cloudAgentCompilerVersion  = "cloud-agent-policy-compiler/v5"
 	cloudAgentDefaultReasoning = "off"
 )
 
@@ -55,6 +55,9 @@ func cloudAgentCapabilityGuide() string {
 		b.WriteString(descriptor.Type)
 		b.WriteString("）：")
 		b.WriteString(descriptor.Purpose)
+		if variant := descriptor.Variant; variant != nil {
+			fmt.Fprintf(&b, " 画布识别：type=%s 且 workflowKind=%s，读取结果 kind=%s；不能用 add_node 新建。", variant.BaseType, variant.WorkflowKind, descriptor.Type)
+		}
 		if len(descriptor.GoodFor) > 0 {
 			b.WriteString(" 适合：")
 			b.WriteString(strings.Join(descriptor.GoodFor, "、"))
@@ -97,7 +100,7 @@ func cloudAgentSkillManifestDescription(description string) string {
 	return strings.TrimSpace(string(runes[:maxRunes])) + "…"
 }
 
-func compileCloudAgentPolicies(req CloudAgentRequest, skills []cloudAgentSkill, canvasSummary string, profile cloudAgentProfileSnapshot, anchors ...cloudAgentCreativeAnchor) (string, cloudAgentPolicySnapshot, error) {
+func compileCloudAgentPolicies(req CloudAgentRequest, agentName string, skills []cloudAgentSkill, canvasSummary string, profile cloudAgentProfileSnapshot, anchors ...cloudAgentCreativeAnchor) (string, cloudAgentPolicySnapshot, error) {
 	system, media, err := prompts.LoadAgentPolicies()
 	if err != nil {
 		return "", cloudAgentPolicySnapshot{}, err
@@ -120,13 +123,20 @@ func compileCloudAgentPolicies(req CloudAgentRequest, skills []cloudAgentSkill, 
 	// Behavior belongs to versioned policies; the compiler only projects facts.
 	context := map[string]any{
 		"source": "server_snapshot", "permissionMode": req.PermissionMode,
+		"agentIdentity": map[string]string{"name": firstNonEmpty(strings.TrimSpace(agentName), defaultCanvasAppearance().AgentName)},
 		"reasoningMode": mode,
 		"budget": map[string]any{
 			"maxCredits": req.Budget.MaxCredits, "maxSteps": cloudAgentStepLimit(req),
 			"maxGenerationTasks": req.Budget.MaxGenerationTasks, "maxVideoSeconds": req.Budget.MaxVideoSeconds,
 		},
 		"maxToolCalls": cloudAgentMaxToolCalls, "maxOutputBytes": cloudAgentMaxOutputBytes,
-		"canvasSummary": canvasSummary,
+	}
+	if strings.TrimSpace(canvasSummary) != "" {
+		// Callers may provide a catalog for policy-contract tests or other
+		// isolated compilation paths. The production run path deliberately
+		// passes an empty value and places the catalog in canonical messages so
+		// the stable system prefix remains cacheable.
+		context["canvasSummary"] = canvasSummary
 	}
 	if len(anchors) > 0 {
 		// User intent remains in user messages, never frozen into system context.

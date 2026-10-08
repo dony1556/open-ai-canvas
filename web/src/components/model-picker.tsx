@@ -13,7 +13,7 @@ import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { ModelLogo } from "@/components/model-logo";
 import { ModelTags } from "@/components/model-tags";
-import { quoteModel, type LogicalModelQuote } from "@/services/api/logical-models";
+import { quoteModel, type LogicalModelQuote, type PublicChannelModelAvailability } from "@/services/api/logical-models";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -54,8 +54,8 @@ export function ModelPicker({
     const rawTheme = useActiveTheme();
     const theme = (canvasThemes[rawTheme as keyof typeof canvasThemes] ?? canvasThemes.dark) as CanvasTheme;
     const [open, setOpen] = useState(false);
+    const [availableHeight, setAvailableHeight] = useState(0);
     const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
-    const [triggerWidth, setTriggerWidth] = useState<number | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
     const options = useMemo(() => Array.from(new Set(selectableModelsByCapability(config, capability).filter(Boolean))), [capability, config]);
@@ -72,14 +72,19 @@ export function ModelPicker({
     const creationVariant = variant === "creation";
 
     useLayoutEffect(() => {
-        const trigger = triggerRef.current;
-        if (!trigger) return;
-        const updateTriggerWidth = () => setTriggerWidth(Math.ceil(trigger.getBoundingClientRect().width));
-        updateTriggerWidth();
-        const observer = new ResizeObserver(updateTriggerWidth);
-        observer.observe(trigger);
-        return () => observer.disconnect();
-    }, [className, fullWidth, showSelectedPrice, variant, value]);
+        if (!open) return;
+        const updateAvailableHeight = () => {
+            const { top, bottom } = triggerRef.current!.getBoundingClientRect();
+            setAvailableHeight(Math.max(top, window.innerHeight - bottom));
+        };
+        updateAvailableHeight();
+        window.addEventListener("resize", updateAvailableHeight);
+        window.addEventListener("scroll", updateAvailableHeight, true);
+        return () => {
+            window.removeEventListener("resize", updateAvailableHeight);
+            window.removeEventListener("scroll", updateAvailableHeight, true);
+        };
+    }, [open]);
 
     useEffect(() => {
         if (!showSelectedPrice || !creditsEnabled || !quoteRequest) {
@@ -167,13 +172,7 @@ export function ModelPicker({
                 "canvas-model-picker-menu creation-model-picker-menu max-w-[calc(100vw-24px)]",
                 activeGroupKey === null ? "is-brand-list" : "is-model-list",
             )}
-            style={
-                {
-                    background: theme.node.panel,
-                    color: theme.node.text,
-                    "--canvas-model-picker-trigger-width": triggerWidth ? String(triggerWidth) + "px" : undefined,
-                } as CSSProperties
-            }
+            style={{ background: theme.node.panel, color: theme.node.text, "--canvas-model-picker-available-height": `${availableHeight}px` } as CSSProperties}
             role="listbox"
             aria-label={placeholder}
             onKeyDown={handleMenuKeyDown}
@@ -202,7 +201,7 @@ export function ModelPicker({
                             </button>;
                         })}
                     </div>
-                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0 overflow-hidden">
+                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0">
                         <div className="grid min-w-0 gap-1">
                             {group.models.map((modelGroup) => {
                                 const selected = modelGroup.models.includes(current);
@@ -260,6 +259,7 @@ export function ModelPicker({
                 onOpenChange={setPickerOpen}
                 trigger="click"
                 placement="bottomLeft"
+                align={{ overflow: { adjustY: true, shiftX: true } }}
                 arrow={false}
                 content={content}
                 classNames={{
@@ -337,19 +337,22 @@ export function ModelLabel({
             <span className="grid size-6 shrink-0 place-items-center rounded-md" style={{ background: theme.toolbar.itemHover }}>
                 <ModelIcon config={config} model={model} />
             </span>
-            <span className="min-w-44 flex-1 overflow-hidden">
-                <span className="block min-w-0 truncate text-[var(--fs-label)] font-medium leading-none">{label || pickerModelDisplayName(config, model, showConfiguredModelName)}</span>
-                <span className={cn("canvas-model-picker-description mt-1 block truncate text-[var(--fs-tiny)]", showDescription && "is-visible")} style={{ color: theme.node.muted }}>
+            <span className="min-w-0 flex-1 overflow-hidden">
+                <span className="canvas-model-picker-option-heading">
+                    <span className="canvas-model-picker-option-name text-[var(--fs-label)] font-medium leading-none" title={label || pickerModelDisplayName(config, model, showConfiguredModelName)}>{label || pickerModelDisplayName(config, model, showConfiguredModelName)}</span>
+                    {showPrice ? (
+                        <span className="canvas-model-picker-option-price">
+                            {/* 候选模型展示自身价目；当前参数的精确报价只在选中后的触发器显示。 */}
+                            <ModelPrice price={modelMenuPrice(config, model, capability, true, requirements)} />
+                        </span>
+                    ) : null}
+                    <ModelAvailabilityBadge availability={modelAvailability(config, model)} available={logicalCost?.available ?? true} showAvailability={channel.scope === "system"} />
+                </span>
+                <span className={cn("canvas-model-picker-description mt-1 block", showDescription && "is-visible")} style={{ color: theme.node.muted }}>
                     {capabilitySummary}
                 </span>
                 <ModelTags tags={logicalCost?.tags} />
             </span>
-            {showPrice ? (
-                <span className="ml-auto shrink-0 pl-2">
-                    {/* 候选模型展示自身价目；当前参数的精确报价只在选中后的触发器显示。 */}
-                    <ModelPrice price={modelMenuPrice(config, model, capability, true, requirements)} />
-                </span>
-            ) : null}
             {!creationVariant && meta.time ? (
                 <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[var(--fs-tiny)] tabular-nums" style={{ background: theme.toolbar.itemHover, color: theme.node.muted }}>
                     {meta.time}
@@ -524,6 +527,58 @@ function ModelPrice({ price, quote, compact = false }: { price: ModelMenuPrice |
     );
 }
 
+function modelAvailability(config: AiConfig, model: string): PublicChannelModelAvailability | undefined {
+    if (!model) return undefined;
+    const channel = resolveModelChannel(config, model);
+    return channel.modelCosts?.find((item) => item.model === modelOptionName(model))?.availability;
+}
+
+function ModelAvailabilityBadge({ availability, available, showAvailability }: { availability?: PublicChannelModelAvailability; available: boolean; showAvailability: boolean }) {
+    if (!showAvailability) return null;
+    const label = availability?.dataState === "ready" && availability.rate24h !== null
+        ? `${Math.round(availability.rate24h * 100)}%`
+        : availability?.dataState === "insufficient"
+            ? "数据不足"
+            : "暂无数据";
+    const trend = availability?.trend7d || [];
+    const trendSamples = trend.reduce((total, item) => total + item.sampleCount, 0);
+    const summary = availability
+        ? `当前${available ? "可用" : "不可用"}；近24小时${label}，样本 ${availability.sampleCount24h} 条`
+        : `当前${available ? "可用" : "不可用"}；历史成功率暂不可用`;
+    const content = availability ? (
+        <div className="model-picker-availability-popover">
+            <div className="model-picker-availability-popover-head">
+                <strong>近24小时成功率</strong>
+                <span>{label}</span>
+            </div>
+            <div className="model-picker-availability-popover-meta">{availability.sampleCount24h} 次 create 尝试 · 7天样本 {trendSamples} 条</div>
+            <div className="model-picker-availability-trend" aria-label="近7天成功率趋势">
+                {trend.map((item) => {
+                    const dayLabel = item.rate === null ? "暂无数据" : `${Math.round(item.rate * 100)}%`;
+                    return <span key={item.day} className={`model-picker-availability-segment is-${item.dataState}`} title={`${item.day}：${dayLabel}，${item.sampleCount} 条`} style={item.rate === null ? undefined : { opacity: 0.35 + item.rate * 0.65 }} />;
+                })}
+            </div>
+            <div className="model-picker-availability-popover-foot">7天分段趋势 · 悬停查看每日样本</div>
+        </div>
+    ) : null;
+    return (
+        <Popover content={content} trigger={["hover", "focus"]} placement="topRight" arrow={false}>
+            <span
+                className={`model-picker-availability is-${availability?.dataState || "unavailable"}`}
+                role="img"
+                tabIndex={0}
+                aria-label={summary}
+                title={summary}
+                onClick={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+            >
+                <span className="model-picker-availability-dot" aria-hidden="true" />
+                <span className="model-picker-availability-label">近24h {label}</span>
+            </span>
+        </Popover>
+    );
+}
 function modelMenuMeta(model: string, capability?: ModelCapability): { description: string; time?: string } {
     const name = modelOptionName(model).toLowerCase();
     if (capability === "image") {

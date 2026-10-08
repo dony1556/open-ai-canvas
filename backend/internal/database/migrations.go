@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 35
+const CurrentSchemaVersion int64 = 47
 
 const baselineSchemaChecksum = "sha256:open-ai-canvas-schema-v1-20260830"
 const schemaMigrationAppliedAtIndexChecksum = "sha256:schema-migrations-applied-at-index-v2-20260830"
@@ -22,6 +22,13 @@ const resourcePlaybackChecksum = "sha256:resource-playback-v6-20260902"
 const assetLibraryFoldersChecksum = "sha256:asset-library-folders-v6-20260902"
 const logicalModelActiveCodeChecksum = "sha256:logical-model-active-code-v8-20260905"
 const creationRuntimeChecksum = "sha256:creation-runtime-v10-20260909"
+const authNotificationsChecksum = "sha256:auth-notifications-v35-20260924"
+const cloudAgentGeminiCacheChecksum = "sha256:cloud-agent-gemini-cache-v36-20260924"
+const cloudAgentGeminiCacheIdentityChecksum = "sha256:cloud-agent-gemini-cache-identity-v37-20260925"
+const prefixedIDSequenceReconcileChecksum = "sha256:prefixed-id-sequence-reconcile-v38-20260926"
+const skillLibraryCategoriesChecksum = "sha256:skill-library-categories-v39-20260926"
+const builtinSkillTombstonesChecksum = "sha256:builtin-skill-tombstones-v40-20260927"
+const resourceThumbnailChecksum = "sha256:resource-thumbnail-v41-20260927"
 
 const postgresSchemaMigrationLockID int64 = 73123910420260830
 
@@ -48,6 +55,7 @@ type migration struct {
 }
 
 var schemaMigrations = []migration{
+	// 44 and 45 are reserved for independent migrations.
 	{version: 1, name: "baseline_gorm_schema", checksum: baselineSchemaChecksum, apply: migrateSchemaV1},
 	{version: 2, name: "schema_migrations_applied_at_index", checksum: schemaMigrationAppliedAtIndexChecksum, apply: migrateSchemaV2},
 	{version: 3, name: "asset_taxonomy_candidate_identity", checksum: assetTaxonomyCandidateIdentityChecksum, apply: migrateSchemaV3},
@@ -117,7 +125,53 @@ var schemaMigrations = []migration{
 		}
 		return nil
 	}},
-	{version: 35, name: "auth_notification_schema", checksum: "sha256:auth-notification-schema-v35", apply: migrateAuthNotificationSchema},
+	{version: 35, name: "auth_notifications", checksum: authNotificationsChecksum, apply: migrateSchemaV35},
+	{version: 36, name: "cloud_agent_gemini_cache", checksum: cloudAgentGeminiCacheChecksum, apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.CloudAgentGeminiCache{})
+	}},
+	{version: 37, name: "cloud_agent_gemini_cache_identity", checksum: cloudAgentGeminiCacheIdentityChecksum, apply: migrateCloudAgentGeminiCacheIdentity},
+	{version: 38, name: "prefixed_id_sequence_reconcile", checksum: prefixedIDSequenceReconcileChecksum, apply: migratePrefixedIDSequenceReconcile},
+	{version: 39, name: "skill_library_categories", checksum: skillLibraryCategoriesChecksum, apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.SkillLibraryCategory{}, &model.UserSkillState{})
+	}},
+	{version: 40, name: "builtin_skill_tombstones", checksum: builtinSkillTombstonesChecksum, apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.BuiltinSkillTombstone{})
+	}},
+	{version: 41, name: "resource_thumbnail", checksum: resourceThumbnailChecksum, apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.Resource{})
+	}},
+	{version: 42, name: "cloud_agent_pi_sessions", checksum: "sha256:cloud-agent-pi-sessions-v42-20260928", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.CloudAgentPiSession{})
+	}},
+	{version: 43, name: "topup_sale_strategies", checksum: "sha256:topup-sale-strategies-v43-20260929", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.TopupProduct{}, &model.PaymentOrder{})
+	}},
+	{version: 45, name: "upload_reservations", checksum: "sha256:upload-reservations-v45-20261005", apply: func(tx *gorm.DB) error {
+		return tx.AutoMigrate(&model.UploadReservation{})
+	}},
+	{version: 46, name: "skill_curation", checksum: "sha256:skill-curation-v46-20261005", apply: migrateSkillCuration},
+	{version: 47, name: "skill_curation_roots", checksum: "sha256:skill-curation-roots-v47-20261005", apply: migrateSkillCurationRoots},
+}
+
+func migratePrefixedIDSequenceReconcile(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&model.IDSequence{}); err != nil {
+		return fmt.Errorf("创建可读 ID 序列表：%w", err)
+	}
+	return reconcilePrefixedIDSequences(tx)
+}
+
+func migrateCloudAgentGeminiCacheIdentity(tx *gorm.DB) error {
+	// v36 accidentally made cache_key globally unique while repository reads and
+	// writes are user-scoped. Remove that index before creating the explicit
+	// (user_id, cache_key) identity used by the model tags.
+	for _, name := range []string{"idx_cloud_agent_gemini_caches_cache_key", "idx_cloud_agent_gemini_cache_cache_key"} {
+		if tx.Migrator().HasIndex(&model.CloudAgentGeminiCache{}, name) {
+			if err := tx.Migrator().DropIndex(&model.CloudAgentGeminiCache{}, name); err != nil {
+				return fmt.Errorf("删除 Gemini 缓存旧唯一索引 %s：%w", name, err)
+			}
+		}
+	}
+	return tx.AutoMigrate(&model.CloudAgentGeminiCache{})
 }
 
 func migrateChannelModelTags(tx *gorm.DB) error {
@@ -132,33 +186,6 @@ func migrateOAuthStateAcceptedTerms(tx *gorm.DB) error {
 		return nil
 	}
 	return tx.Migrator().AddColumn(&model.OAuthState{}, "AcceptedTerms")
-}
-
-// migrateAuthNotificationSchema 补齐 v1.5.7.1 漏写的迁移：
-// 上游把 SMSChannel / SMSRecord / AuthVerification / NotificationQuota 加进了 Models()，
-// 并给 User 增加了 Phone / EmailVerifiedAt / PhoneVerifiedAt 字段，但这些只对新装库生效
-// （v1 基线里的 AutoMigrate 已记录为 applied，存量库升级时不会重跑），
-// 导致存量库登录、获取认证设置等接口报 500：
-// column "phone" of relation "users" does not exist (SQLSTATE 42703)。
-// 这里按既有风格做幂等补齐：列用 HasColumn 判断逐条 AddColumn，新表用 AutoMigrate 建全。
-// users 表可能不存在（历史/局部 schema，见 migrations_test.go 的既有用例），
-// 因此加列的循环必须先用 HasTable 守卫，否则会报 "no such table: users"。
-func migrateAuthNotificationSchema(tx *gorm.DB) error {
-	if tx.Migrator().HasTable(&model.User{}) {
-		for _, field := range []string{"Phone", "EmailVerifiedAt", "PhoneVerifiedAt"} {
-			if !tx.Migrator().HasColumn(&model.User{}, field) {
-				if err := tx.Migrator().AddColumn(&model.User{}, field); err != nil {
-					return fmt.Errorf("增加 users.%s 列：%w", field, err)
-				}
-			}
-		}
-	}
-	for _, entity := range []any{&model.SMSChannel{}, &model.SMSRecord{}, &model.AuthVerification{}, &model.NotificationQuota{}} {
-		if err := tx.AutoMigrate(entity); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func migrateChannelCreditCost(tx *gorm.DB) error {

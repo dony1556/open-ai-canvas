@@ -19,6 +19,7 @@ import {
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import type { CanvasTheme } from "@/lib/canvas-theme";
 import type { CanvasBatchOperation, CanvasBatchRow, CanvasBatchTableData, CanvasConnection, CanvasGenerationBatch, CanvasGenerationBatchItem, CanvasNodeData } from "@/types/canvas";
+import { generationErrorMessage } from "@/lib/generation-error";
 
 type ReferenceCell = { rowId: string; columnIndex: number };
 
@@ -359,7 +360,7 @@ function BatchReferenceHandle({ column, index, theme, commonStyle, onConnectStar
     }, []);
     return (
         <Tooltip title={`连接到${column.label}`} placement="left">
-            <button type="button" aria-label={`${column.label}连线点`} className="group absolute z-[var(--node-z-handle)] grid place-items-center rounded-full outline-none" style={{ ...commonStyle, top: BATCH_REFERENCE_HANDLE_TOP + index * BATCH_REFERENCE_HANDLE_GAP, cursor: "crosshair" }} onPointerEnter={(event) => { setHovered(true); update(event); }} onPointerMove={update} onPointerLeave={reset} onPointerDown={(event) => { event.stopPropagation(); onConnectStart(event, handleId); }} onPointerUp={(event) => { event.stopPropagation(); onConnectDrop?.(event, handleId); }}>
+            <button type="button" data-icon-only aria-label={`${column.label}连线点`} className="group absolute z-[var(--node-z-handle)] grid place-items-center rounded-full outline-none" style={{ ...commonStyle, top: BATCH_REFERENCE_HANDLE_TOP + index * BATCH_REFERENCE_HANDLE_GAP, cursor: "crosshair" }} onPointerEnter={(event) => { setHovered(true); update(event); }} onPointerMove={update} onPointerLeave={reset} onPointerDown={(event) => { event.stopPropagation(); onConnectStart(event, handleId); }} onPointerUp={(event) => { event.stopPropagation(); onConnectDrop?.(event, handleId); }}>
                 <span className="grid size-[18px] place-items-center rounded-full border text-[8px] font-semibold shadow-sm transition-transform duration-100 group-hover:scale-125 group-focus-visible:scale-125" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${hovered ? 1.06 : 1})`, background: theme.node.panel, borderColor: theme.accent.primary, color: theme.accent.primary }}>{index + 1}</span>
             </button>
         </Tooltip>
@@ -465,9 +466,9 @@ type RowStatus = { label: string; tone: RowStatusTone; loading: boolean; retryab
 
 function rowStatus(item: CanvasGenerationBatchItem | undefined, output: CanvasNodeData | undefined): RowStatus {
     if (hasNodeMedia(output)) return { label: "生成完成", tone: "success", loading: false, retryable: false };
-    if (item?.status === "failed") return { label: item.errorDetails || "生成失败", tone: "error", loading: false, retryable: true };
+    if (item?.status === "failed") return { label: item.errorDetails ? generationErrorMessage(item.errorDetails) : "生成失败", tone: "error", loading: false, retryable: true };
     if (item?.status === "cancelled") return { label: "已停止", tone: "error", loading: false, retryable: false };
     if (item && ["waiting", "submitting", "queued", "running"].includes(item.status)) return { label: item.status === "waiting" ? "等待中" : item.status === "submitting" ? "正在提交" : item.status === "queued" ? "已排队" : "生成中", tone: "loading", loading: true, retryable: false };
-    if (output?.metadata?.status === "error") return { label: output.metadata.errorDetails || "生成失败", tone: "error", loading: false, retryable: false };
+    if (output?.metadata?.status === "error") return { label: output.metadata.errorDetails ? generationErrorMessage(output.metadata.errorDetails) : "生成失败", tone: "error", loading: false, retryable: false };
     return { label: "待生成", tone: "idle", loading: false, retryable: false };
 }

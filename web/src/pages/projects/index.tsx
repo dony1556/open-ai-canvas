@@ -4,7 +4,7 @@ import { CachedResourceImage } from "@/components/cached-resource-image";
 import { MediaPlaceholder } from "@/components/ui/product/media-placeholder";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Form, Input, Modal, Select } from "antd";
+import { App, Button, Form, Input, Modal } from "antd";
 import { ArrowRight, BookOpenText, FileText, FolderKanban, Images, LayoutGrid, Palette, Plus, Search, Sparkles } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
@@ -15,6 +15,7 @@ import { resourceFileUrl } from "@/services/api/resources";
 import { ModelPicker } from "@/components/model-picker";
 import { createStyleProfileSnapshot, parseStyleProfile, serializeStyleProfile } from "@/lib/canvas/style-profile";
 import { projectSummaryCompletion, projectSummaryStage } from "@/lib/project-workbench";
+import { shouldRetryProjectNameConflict } from "@/lib/project-name-conflict";
 import { settingsPath } from "@/lib/settings-navigation";
 import { PromptTemplateOperation, parseGeneratedStory, promptTemplateTaskPlaceholder, shortDramaOutlineVariables } from "@/lib/prompts";
 import { runBackendGenerationTask } from "@/services/api/generation-task";
@@ -22,6 +23,7 @@ import { createProject, deleteProject, importProjectUnits, listProjects, type Pr
 import { modelDisplayName, useEffectiveConfig } from "@/stores/use-config-store";
 
 import { sourceTypeLabel } from "./detail/shared";
+import { Select } from "@/components/ui/base/select";
 
 type ProjectForm = { name: string; aspectRatio: string; sourceType: string };
 
@@ -338,9 +340,7 @@ async function createUniqueProjectName(story: string, selectedStyle: CanvasStyle
         try {
             return await createProject(buildInput(attempt === 0 ? base : `${base}（${attempt + 1}）`));
         } catch (error) {
-            const message = error instanceof Error ? error.message : "";
-            const uniqueConflict = message.includes("UNIQUE") || message.includes("projects.user_id") || message.includes("projects.name");
-            if (!uniqueConflict || attempt >= 5) throw error;
+            if (!shouldRetryProjectNameConflict(error, attempt)) throw error;
             attempt += 1;
         }
     }

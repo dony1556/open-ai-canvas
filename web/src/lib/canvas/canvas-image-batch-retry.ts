@@ -159,7 +159,7 @@ export function reconcileImageBatchRoot(root: CanvasNodeData, nodes: CanvasNodeD
     const loading = children.some((node) => node.metadata?.status === "loading");
     const failed = children.find((node) => node.metadata?.status === "error");
     // 批次父节点只是子任务的投影，不能保留上一轮单图任务的身份/终态。
-    const metadata: CanvasNodeMetadata = resetGenerationTaskMetadata(root.metadata, root.metadata?.status);
+    const metadata: CanvasNodeMetadata = root.metadata.generationOutputCount ? { ...root.metadata } : resetGenerationTaskMetadata(root.metadata, root.metadata?.status);
     metadata.batchFailedCount = children.filter((node) => node.metadata?.status === "error").length;
 
     if (primary) {
@@ -171,12 +171,15 @@ export function reconcileImageBatchRoot(root: CanvasNodeData, nodes: CanvasNodeD
         metadata.naturalWidth = primary.metadata?.naturalWidth;
         metadata.naturalHeight = primary.metadata?.naturalHeight;
         metadata.primaryImageId = primary.id;
+        if (primary.metadata?.producedModel) metadata.producedModel = primary.metadata.producedModel;
+        else delete metadata.producedModel;
         metadata.status = "success";
         delete metadata.errorDetails;
         delete metadata.generationErrorCode;
         delete metadata.failedPromptFingerprint;
     } else {
         delete metadata.content;
+        delete metadata.producedModel;
         delete metadata.storageKey;
         delete metadata.assetId;
         delete metadata.mimeType;

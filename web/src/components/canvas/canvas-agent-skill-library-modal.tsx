@@ -1,20 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Input } from "antd";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, Button, Input } from "antd";
 import { Check, LoaderCircle, Plus, Search, Sparkles, Users } from "lucide-react";
 
 import { AppModal } from "@/components/ui/product/app-modal";
 import type { CanvasTheme } from "@/lib/canvas-theme";
-import type { Skill, SkillCategory } from "@/services/api/skills";
+import type { Skill, SkillCategory, SkillLibraryCategory } from "@/services/api/skills";
+import { curationIcon, matchesCuration, effectiveCurationRoot, type useSkillCuration } from "@/components/skills/skill-curation-browser";
 
 type SkillLibraryTab = "enabled" | "installed" | "market";
 
 type CanvasAgentSkillLibraryModalProps = {
+    curationState: ReturnType<typeof useSkillCuration>;
+    platformCategory: string;
+    onPlatformCategoryChange: (value: string) => void;
     open: boolean;
     theme: CanvasTheme;
     installedSkills: Skill[];
     marketSkills: Skill[];
     selectedSkillIds: string[];
     categories: SkillCategory[];
+    libraryCategories: SkillLibraryCategory[];
     category: string;
     search: string;
     loading: boolean;
@@ -28,12 +33,14 @@ type CanvasAgentSkillLibraryModalProps = {
 };
 
 export function CanvasAgentSkillLibraryModal({
+    curationState, platformCategory, onPlatformCategoryChange,
     open,
     theme,
     installedSkills,
     marketSkills,
     selectedSkillIds,
     categories,
+    libraryCategories,
     category,
     search,
     loading,
@@ -46,36 +53,62 @@ export function CanvasAgentSkillLibraryModal({
     onLoadMore,
 }: CanvasAgentSkillLibraryModalProps) {
     const [tab, setTab] = useState<SkillLibraryTab>("market");
+    const [libraryCategoryId, setLibraryCategoryId] = useState("all");
     const listRef = useRef<HTMLDivElement>(null);
     const loadMoreRef = useRef<HTMLDivElement>(null);
     const wasOpenRef = useRef(false);
     const selectedCount = selectedSkillIds.length;
 
     useEffect(() => {
-        if (open && !wasOpenRef.current) setTab("market");
+        if (open && !wasOpenRef.current) {
+            setTab("market");
+            setLibraryCategoryId("all");
+            onCategoryChange("all");
+        }
         wasOpenRef.current = open;
-    }, [open]);
+    }, [onCategoryChange, open]);
 
     useEffect(() => {
         listRef.current?.scrollTo({ top: 0 });
-    }, [category, search, tab]);
+    }, [category, libraryCategoryId, search, tab]);
+
+    useEffect(() => {
+        const data = curationState.curation;
+        const valid = platformCategory.startsWith("root:")
+            ? data?.roots?.some((root) => root.id === platformCategory.slice(5))
+            : data?.categories.some((item) => item.id === platformCategory);
+        if ((!data?.enabled || (platformCategory && platformCategory !== "__uncategorized__" && !valid)) && platformCategory) onPlatformCategoryChange("");
+    }, [curationState.curation, onPlatformCategoryChange, platformCategory]);
+
+    const librarySource = useMemo(() => tab === "enabled"
+        ? installedSkills.filter((skill) => selectedSkillIds.includes(skill.skillId))
+        : installedSkills, [installedSkills, selectedSkillIds, tab]);
+
+    const libraryCategoryCounts = useMemo(() => {
+        const counts = new Map<string, number>();
+        librarySource.forEach((skill) => {
+            const categoryId = skill.libraryCategoryId || "__uncategorized__";
+            counts.set(categoryId, (counts.get(categoryId) || 0) + 1);
+        });
+        return counts;
+    }, [librarySource]);
 
     const visibleSkills = useMemo(() => {
         const keyword = search.trim().toLocaleLowerCase("zh-CN");
-        const source = tab === "enabled"
-            ? installedSkills.filter((skill) => selectedSkillIds.includes(skill.skillId))
-            : tab === "installed"
-                ? installedSkills
-                : marketSkills;
-
+        const source = tab === "market" ? marketSkills : librarySource;
         return source.filter((skill) => {
-            if (category !== "all" && skill.tag !== category) return false;
+            if (!matchesCuration(skill, curationState.curation, platformCategory)) return false;
+            if (tab === "market" && category !== "all" && skill.tag !== category) return false;
+            if (tab !== "market") {
+                if (libraryCategoryId === "__uncategorized__" && skill.libraryCategoryId) return false;
+                if (libraryCategoryId !== "all" && libraryCategoryId !== "__uncategorized__" && skill.libraryCategoryId !== libraryCategoryId) return false;
+            }
             if (!keyword) return true;
-            return `${skill.skillName} ${skill.description || ""} ${skill.effectiveUser?.name || ""}`
+            return `${skill.skillName} ${skill.description || ""} ${skill.instruction || ""} ${skill.extraInfo || ""} ${skill.effectiveUser?.name || ""} ${categories.find((item) => item.value === skill.tag)?.label || ""}`
                 .toLocaleLowerCase("zh-CN")
                 .includes(keyword);
         });
-    }, [category, installedSkills, marketSkills, search, selectedSkillIds, tab]);
+    }, [categories, category, libraryCategoryId, librarySource, marketSkills, search, tab, curationState.curation, platformCategory]);
 
     useEffect(() => {
         const target = loadMoreRef.current;
@@ -95,14 +128,33 @@ export function CanvasAgentSkillLibraryModal({
         return [...unique.values()];
     }, [categories]);
 
+    const marketplaceCategoryTotal = useMemo(
+        () => categoryItems.reduce((total, item) => total + (item.count || 0), 0),
+        [categoryItems],
+    );
+
     const emptyText = tab === "enabled"
-        ? "本轮还没有启用技能，可在“我的技能”中选择"
+        ? selectedCount === 0 ? "本轮还没有启用技能，可在“我的技能”中选择" : "没有匹配的已启用技能"
         : tab === "installed"
             ? "还没有匹配的已加入技能，可前往“全部”添加"
             : "没有匹配的公开技能，换个关键词或分类试试";
 
     const changeTab = (value: SkillLibraryTab) => {
         setTab(value);
+        setLibraryCategoryId("all");
+        onCategoryChange("all");
+        onPlatformCategoryChange("");
+    };
+
+    const selectMarketplaceCategory = (value: string) => {
+        setTab("market");
+        setLibraryCategoryId("all");
+        onCategoryChange(value);
+    };
+
+    const selectLibraryCategory = (value: string) => {
+        setTab((current) => current === "enabled" ? "enabled" : "installed");
+        setLibraryCategoryId(value);
         onCategoryChange("all");
     };
 
@@ -144,20 +196,57 @@ export function CanvasAgentSkillLibraryModal({
                         className="canvas-agent-skill-library-search"
                     />
                     <nav className="canvas-agent-skill-library-categories thin-scrollbar" aria-label="技能视图与分类">
-                        <SkillTab active={tab === "market" && category === "all"} label="全部" onClick={() => changeTab("market")} />
-                        <SkillTab active={tab === "installed"} label="我的技能" count={installedSkills.length} onClick={() => changeTab("installed")} />
-                        <SkillTab active={tab === "enabled"} label="已启用" count={selectedCount} onClick={() => changeTab("enabled")} />
-                        {categoryItems.map((item) => (
-                            <button
-                                key={item.value}
-                                type="button"
-                                className={`canvas-agent-skill-library-tab ${tab === "market" && category === item.value ? "is-active" : ""}`}
-                                aria-pressed={tab === "market" && category === item.value}
-                                onClick={() => { setTab("market"); onCategoryChange(item.value); }}
-                            >
-                                {item.label}
-                            </button>
-                        ))}
+                        {curationState.error ? <Alert type="warning" title={curationState.error} action={<Button onClick={curationState.retry}>重试</Button>} /> : null}
+                        {curationState.curation?.enabled ? (
+                            <div className="canvas-agent-skill-library-category-group" role="group" aria-label="平台分类">
+                                <div className="canvas-agent-skill-library-category-heading">平台分类</div>
+                                <SkillTab active={!platformCategory} label="全部分类" onClick={() => onPlatformCategoryChange("")} />
+                                <SkillTab active={platformCategory === "__uncategorized__"} label="未细分" onClick={() => onPlatformCategoryChange("__uncategorized__")} />
+                                {(curationState.curation.roots || []).map((root) => {
+                                    const Icon = curationIcon(root.iconKey);
+                                    const children = curationState.curation?.categories.filter((item) => item.rootTag === root.id) || [];
+                                    return (
+                                        <div key={root.id} className="canvas-agent-skill-library-platform-branch">
+                                            <SkillTab active={platformCategory === `root:${root.id}`} icon={<Icon className="size-4" aria-hidden="true" />} label={root.name} onClick={() => onPlatformCategoryChange(`root:${root.id}`)} />
+                                            {children.map((item) => (
+                                                <SkillTab key={item.id} active={platformCategory === item.id} label={item.name} onClick={() => onPlatformCategoryChange(item.id)} />
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                                {(curationState.curation.categories || []).filter((item) => !(curationState.curation?.roots || []).some((root) => root.id === item.rootTag)).map((item) => (
+                                    <SkillTab key={item.id} active={platformCategory === item.id} label={item.name} onClick={() => onPlatformCategoryChange(item.id)} />
+                                ))}
+                            </div>
+                        ) : null}
+                        <div className="canvas-agent-skill-library-category-group">
+                            <div className="canvas-agent-skill-library-category-heading">我的技能分类</div>
+                            <SkillTab active={tab !== "market" && libraryCategoryId === "all"} label="全部分类" count={librarySource.length} onClick={() => selectLibraryCategory("all")} />
+                            <SkillTab active={tab !== "market" && libraryCategoryId === "__uncategorized__"} label="未分类" count={libraryCategoryCounts.get("__uncategorized__") || 0} onClick={() => selectLibraryCategory("__uncategorized__")} />
+                            {libraryCategories.map((item) => (
+                                <SkillTab
+                                    key={item.id}
+                                    active={tab !== "market" && libraryCategoryId === item.id}
+                                    label={item.name}
+                                    count={libraryCategoryCounts.get(item.id) || 0}
+                                    onClick={() => selectLibraryCategory(item.id)}
+                                />
+                            ))}
+                        </div>
+
+                        <div className="canvas-agent-skill-library-category-group">
+                            <div className="canvas-agent-skill-library-category-heading">技能广场分类</div>
+                            <SkillTab active={tab === "market" && category === "all"} label="全部技能" count={marketplaceCategoryTotal} onClick={() => changeTab("market")} />
+                            {!curationState.curation?.enabled && categoryItems.map((item) => (
+                                <SkillTab
+                                    key={item.value}
+                                    active={tab === "market" && category === item.value}
+                                    label={item.label}
+                                    count={item.count}
+                                    onClick={() => selectMarketplaceCategory(item.value)}
+                                />
+                            ))}
+                        </div>
                     </nav>
                 </aside>
 
@@ -174,6 +263,7 @@ export function CanvasAgentSkillLibraryModal({
                             <SkillLibraryCard
                                 key={skill.skillId}
                                 skill={skill}
+                                rootLabel={curationState.curation?.enabled ? curationState.curation.roots?.find((root) => root.id === effectiveCurationRoot(skill, curationState.curation!))?.name : undefined}
                                 theme={theme}
                                 categories={categories}
                                 selected={selectedSkillIds.includes(skill.skillId)}
@@ -199,7 +289,7 @@ export function CanvasAgentSkillLibraryModal({
                     </div>
 
                     <footer className="canvas-agent-skill-library-footer" style={{ color: theme.node.muted, borderColor: theme.node.stroke }}>
-                        <span>{tab === "enabled" ? `${selectedCount} 个技能将在本轮生效` : tab === "installed" ? `${visibleSkills.length} 个已加入技能` : `已加载 ${marketSkills.length} 个公开技能`}</span>
+                        <span>{tab === "enabled" ? `${visibleSkills.length} 个技能将在本轮生效` : tab === "installed" ? `${visibleSkills.length} 个已加入技能` : `已加载 ${marketSkills.length} 个公开技能`}</span>
                         {tab === "market" && hasMore ? (
                             <Button size="small" disabled={loading} loading={loading} onClick={() => void onLoadMore()}>{loading ? "加载中" : "加载更多"}</Button>
                         ) : <span>{tab === "market" ? "已加载全部" : "最多启用 8 个"}</span>}
@@ -210,17 +300,19 @@ export function CanvasAgentSkillLibraryModal({
     );
 }
 
-function SkillTab({ active, label, count, onClick }: { active: boolean; label: string; count?: number; onClick: () => void }) {
+function SkillTab({ active, icon, label, count, onClick }: { active: boolean; icon?: ReactNode; label: string; count?: number; onClick: () => void }) {
     return (
-        <button type="button" aria-pressed={active} className={`canvas-agent-skill-library-tab ${active ? "is-active" : ""}`} onClick={onClick}>
+        <button type="button" aria-pressed={active} className={`canvas-agent-skill-library-tab${icon ? " has-icon" : ""}${active ? " is-active" : ""}`} onClick={onClick}>
+            {icon}
             {label}
             {typeof count === "number" ? <span>{count}</span> : null}
         </button>
     );
 }
 
-function SkillLibraryCard({ skill, theme, categories, selected, canSelect, onToggle, onInstall }: {
+function SkillLibraryCard({ skill, rootLabel, theme, categories, selected, canSelect, onToggle, onInstall }: {
     skill: Skill;
+    rootLabel?: string;
     theme: CanvasTheme;
     categories: SkillCategory[];
     selected: boolean;
@@ -233,7 +325,8 @@ function SkillLibraryCard({ skill, theme, categories, selected, canSelect, onTog
     const cover = skill.showcaseMedia?.find((item) => item.type === "image" && item.showcaseUrl)
         || skill.showcaseMedia?.find((item) => item.showcaseUrl);
     const coverUrl = cover?.showcaseUrl;
-    const categoryLabel = categories.find((item) => item.value === skill.tag)?.label || "其他";
+    const hasCover = Boolean(coverUrl && !coverFailed);
+    const categoryLabel = rootLabel || categories.find((item) => item.value === skill.tag)?.label || "其他";
     const author = skill.effectiveUser?.name || "影策创作者";
     const addedCount = formatSkillCount(skill.addedCount || 0);
 
@@ -250,21 +343,20 @@ function SkillLibraryCard({ skill, theme, categories, selected, canSelect, onTog
     };
 
     return (
-        <article className={`canvas-agent-skill-card ${selected ? "is-selected" : ""}`}>
-            <div className="canvas-agent-skill-card-cover">
-                {coverUrl && !coverFailed ? (
-                    cover?.type === "video"
-                        ? <video src={coverUrl} muted playsInline preload="metadata" onError={() => setCoverFailed(true)} />
-                        : <img src={coverUrl} alt="" loading="lazy" onError={() => setCoverFailed(true)} />
-                ) : (
-                    <div className="canvas-agent-skill-card-placeholder" aria-hidden="true">
-                        <Sparkles className="size-7" />
-                    </div>
-                )}
-                <span className="canvas-agent-skill-card-category">{categoryLabel}</span>
-                {selected ? <span className="canvas-agent-skill-card-selected" aria-label="本轮已启用"><Check className="size-4" aria-hidden="true" /></span> : null}
-            </div>
-            <div className="canvas-agent-skill-card-body">
+        <article className={`canvas-agent-skill-card ${hasCover ? "" : "is-text-only"} ${selected ? "is-selected" : ""}`}>
+            {hasCover ? (
+                <div className="canvas-agent-skill-card-cover">
+                    {cover?.type === "video" ? (
+                        <video src={coverUrl} muted playsInline preload="metadata" onError={() => setCoverFailed(true)} />
+                    ) : (
+                        <img src={coverUrl} alt="" loading="lazy" onError={() => setCoverFailed(true)} />
+                    )}
+                    <span className="canvas-agent-skill-card-category">{categoryLabel}</span>
+                    {selected ? <span className="canvas-agent-skill-card-selected" aria-label="本轮已启用"><Check className="size-4" aria-hidden="true" /></span> : null}
+                </div>
+            ) : null}
+            <div className={`canvas-agent-skill-card-body ${hasCover ? "" : "is-text-only"}`}>
+                {!hasCover ? <span className="canvas-agent-skill-card-category is-inline">{categoryLabel}</span> : null}
                 <div className="canvas-agent-skill-card-title-row">
                     <h3 title={skill.skillName}>{skill.skillName}</h3>
                     <div className="canvas-agent-skill-card-action">

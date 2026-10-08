@@ -32,7 +32,7 @@ func TestCloudAgentReliabilitySchedulerHeadOfLine500(t *testing.T) {
 	now := time.Now().Add(-time.Hour)
 	var tailID, tailUser string
 	profile := cloudAgentProfileSnapshot{Revision: agentProfileRevision(nil), Hash: agentProfileHash("")}
-	_, policy, err := compileCloudAgentPolicies(agentTestRequest(), nil, "", profile)
+	_, policy, err := compileCloudAgentPolicies(agentTestRequest(), defaultCanvasAppearance().AgentName, nil, "", profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +307,9 @@ func TestCloudAgentReliabilityCancelReplayInterrupted(t *testing.T) {
 func TestCloudAgentReliabilityFailedContinuation(t *testing.T) {
 	s, db, root := reliableAgentRoot(t)
 	if err := db.Model(&model.Task{}).Where("id = ?", root.ID).Updates(map[string]any{"status": model.TaskStatusFailed, "error": "mock failure"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.advanceCloudAgentByID("user", root.ID); err != nil {
 		t.Fatal(err)
 	}
 	req := agentTestRequest()
