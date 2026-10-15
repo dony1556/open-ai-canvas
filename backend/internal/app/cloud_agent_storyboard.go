@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 const maxCloudAgentStoryboardRows = 100
@@ -243,12 +243,12 @@ func prepareCloudAgentStoryboardEdit(repo *repository.Repository, userID, canvas
 		return nil, err
 	}
 	beforeHash := cloudAgentCanvasHash(doc)
-	if !cloudAgentNodeSnapshotMatches(doc, args.NodeID, args.SnapshotHash) {
-		return nil, cloudAgentFieldError("snapshotHash", "stale_snapshot", "这个分镜在你读取之后被修改过，本次未写入；请重新读取分镜后再改")
-	}
 	node, storyboard, rows, err := storyboardNodeFromDocument(doc, args.NodeID)
 	if err != nil {
 		return nil, err
+	}
+	if !cloudAgentNodeSnapshotMatches(doc, args.NodeID, args.SnapshotHash) {
+		return nil, cloudAgentFieldError("snapshotHash", "stale_snapshot", "这个分镜在你读取之后被修改过，本次未写入；请重新读取分镜后再改")
 	}
 	index := -1
 	for i, row := range rows {

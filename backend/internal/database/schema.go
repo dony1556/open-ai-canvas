@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"infinite-canvas/backend/internal/model"
+	"yingce/backend/internal/model"
 
 	"gorm.io/gorm"
 )
@@ -28,7 +28,9 @@ func Models() []any {
 		&model.AgentLesson{},
 		&model.AgentMemorySetting{},
 		&model.User{},
+		&model.UserAvatar{},
 		&model.AuthSession{},
+		&model.LoginLog{},
 		&model.UserIdentity{},
 		&model.OAuthState{},
 		&model.EmailVerificationCode{},
@@ -102,6 +104,9 @@ func Models() []any {
 		&model.CanvasProject{},
 		&model.CanvasSnapshot{},
 		&model.CanvasSnapshotResource{},
+		&model.CanvasMutationReceipt{},
+		&model.WorkbenchTool{},
+		&model.WorkbenchPreset{},
 		&model.CanvasShare{},
 		&model.PromptTemplate{},
 		&model.UserPromptCustomization{},

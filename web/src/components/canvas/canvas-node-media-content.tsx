@@ -18,7 +18,7 @@ import { bindCanvasVideoHoverPreview } from "@/lib/canvas/canvas-video-hover-pre
 import { resolveVideoMediaUrl } from "@/services/file-storage";
 import { hydrateCanvasVideoPreview } from "@/services/canvas-video-preview";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { fitImageMaterialNodeSize, fitNodeSize } from "@/lib/canvas/canvas-node-size";
 import { getActiveUserScope } from "@/lib/user-scope";
 import { prepareCanvasImage } from "@/services/canvas-image-loader";
 import { getResourceAccess, refreshResource, resourceIdFromStorageKey, resolveResourceAccessURL } from "@/services/api/resources";
@@ -53,6 +53,7 @@ export function ImageNodeContent(props: CanvasNodeContentProps) {
     if (!hasImage) return <EmptyImageContent {...props} />;
     return (
         <ImageContent
+            renderLOD={props.renderLOD}
             batchPreviewNodes={props.batchPreviewNodes}
             node={props.node}
             theme={props.theme}
@@ -147,7 +148,7 @@ export function VideoNodeContent({ node, theme, mediaActive = false, onMediaPlay
                     node={node}
                     alt={`${node.title || "视频"} 静态预览`}
                     loading="eager"
-                    decoding="async"
+                    decoding="sync"
                     draggable={false}
                     className={`absolute inset-0 size-full select-none object-contain transition-opacity duration-150 ${videoReady ? "opacity-0" : "opacity-100"}`}
                     loadingFallback={<LoaderCircle className="size-5 animate-spin text-white/55" />}
@@ -275,14 +276,14 @@ export function InactiveVideoPreview({ node, theme, onPlay }: Pick<CanvasNodeCon
                         node={node}
                         alt={`${node.title || "视频"} 静态预览`}
                         loading="lazy"
-                        decoding="async"
+                        decoding="sync"
                         draggable={false}
                         className="pointer-events-none size-full select-none object-contain"
                         loadingFallback={<LoaderCircle className="size-5 animate-spin text-white/55" />}
                         fallback={<Video className="size-7 text-white/40" />}
                     />
                 ) : (
-                    <img src={localPreviewUrl} alt={`${node.title || "视频"} 静态预览`} loading="lazy" decoding="async" draggable={false} className="pointer-events-none size-full select-none object-contain" />
+                    <img src={localPreviewUrl} alt={`${node.title || "视频"} 静态预览`} loading="lazy" decoding="sync" draggable={false} className="pointer-events-none size-full select-none object-contain" />
                 )}
                 <VideoPreviewPlayButton title={node.title || "视频"} onPlay={onPlay} />
             </div>
@@ -463,6 +464,7 @@ export function EmptyMediaContent({ icon, label, color }: { icon: ReactNode; lab
 }
 
 export function ImageContent({
+    renderLOD = "full",
     node,
     theme,
     isBatchRoot,
@@ -472,10 +474,11 @@ export function ImageContent({
     batchOpening,
     batchRecovering,
     onToggleBatch,
-}: Pick<CanvasNodeContentProps, "node" | "theme" | "isBatchRoot" | "batchCount" | "batchPreviewNodes" | "batchExpanded" | "batchOpening" | "batchRecovering" | "onToggleBatch">) {
+}: Pick<CanvasNodeContentProps, "renderLOD" | "node" | "theme" | "isBatchRoot" | "batchCount" | "batchPreviewNodes" | "batchExpanded" | "batchOpening" | "batchRecovering" | "onToggleBatch">) {
     const imageContainerRef = useRef<HTMLDivElement>(null);
-    const nearViewport = useNearViewport(imageContainerRef);
-    const { url, loading, originalWidth, originalHeight } = useNodeResourceUrl(node, nearViewport, "thumbnail");
+    const nearViewport = useNearViewport(imageContainerRef, renderLOD !== "shell");
+    const resourceVariant = renderLOD === "full" && (node.metadata?.imageLayer || node.metadata?.imageLayerGroup) ? "original" : "thumbnail";
+    const { url, loading, originalWidth, originalHeight } = useNodeResourceUrl(node, nearViewport, resourceVariant);
     const importedFromLibTV = node.metadata?.importSource?.provider === "libtv";
     const { updateMediaNode } = useCanvasNodeActions();
     const measuredSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -504,7 +507,9 @@ export function ImageContent({
             if (current.metadata?.freeResize || current.metadata?.manualSize) {
                 return needsMetadata ? { ...current, metadata: { ...metadata, naturalWidth, naturalHeight } } : current;
             }
-            const size = fitNodeSize(naturalWidth, naturalHeight);
+            // 独立素材使用有界预览框；解码回调不能重新把细长文字放大成超宽节点。
+            const materialPreview = metadata?.imageLayerMaterial || (metadata?.isBatchRoot && batchPreviewNodes?.some((child) => child.metadata?.imageLayerMaterial));
+            const size = materialPreview ? fitImageMaterialNodeSize(naturalWidth, naturalHeight) : fitNodeSize(naturalWidth, naturalHeight);
             const needsResize = Math.abs(size.width - current.width) >= 1 || Math.abs(size.height - current.height) >= 1;
             if (!needsMetadata && !needsResize) return current;
             return {
@@ -516,7 +521,15 @@ export function ImageContent({
     };
 
     return (
-        <BatchFrame batchPreviewNodes={batchPreviewNodes} batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} theme={theme} onToggleBatch={onToggleBatch}>
+        <BatchFrame
+            batchPreviewNodes={renderLOD === "full" ? batchPreviewNodes : undefined}
+            batchCount={isBatchRoot && renderLOD === "full" ? batchCount : 0}
+            batchExpanded={batchExpanded}
+            batchOpening={batchOpening}
+            batchRecovering={batchRecovering}
+            theme={theme}
+            onToggleBatch={onToggleBatch}
+        >
             <div ref={imageContainerRef} className="relative h-full w-full overflow-hidden rounded-[var(--node-radius)]">
                 <RetainedCanvasImage
                     identity={`${getActiveUserScope()}:${node.id}:${node.metadata?.storageKey || node.metadata?.content || "empty"}`}
@@ -530,6 +543,16 @@ export function ImageContent({
                     loading={loading}
                     theme={theme}
                 />
+                {node.metadata?.imageLayerGroup?.incomplete ? (
+                    <div role="status" className="absolute bottom-2 left-2 right-2 rounded bg-black/75 px-2 py-1 text-xs text-amber-300">
+                        部分合成：{node.metadata.imageLayerGroup.incomplete.completed}/{node.metadata.imageLayerGroup.incomplete.total} 层已通过{node.metadata.imageLayerGroup.incomplete.missingBackground ? "，缺少完整背景" : ""}，展开可查看并重试失败层
+                    </div>
+                ) : null}
+                {node.metadata?.imageLayerGroup?.compositeStatus === "updating" || node.metadata?.imageLayerGroup?.compositeStatus === "error" ? (
+                    <div role="status" className="absolute inset-0 grid place-items-center bg-black/60 p-4 text-center text-xs text-white">
+                        {node.metadata.imageLayerGroup.compositeStatus === "updating" ? "正在更新合成图…" : node.metadata.imageLayerGroup.compositeError || "合成图更新失败，请在图层管理中重试"}
+                    </div>
+                ) : null}
             </div>
         </BatchFrame>
     );
@@ -614,7 +637,9 @@ export function RetainedCanvasImage({
             <img
                 src={currentDisplayedSrc || undefined}
                 alt={alt || ""}
-                decoding="async"
+                // 世界层每次缩放提交都会按新倍率重新栅格化；async 解码会让 Chromium 先画出
+                // 空白再补图（缩放时白闪）。图片已由 prepareCanvasImage 预解码，同步解码只阻塞栅格不阻塞主线程。
+                decoding="sync"
                 draggable={false}
                 onDragStart={(event) => event.preventDefault()}
                 className={`absolute inset-0 ${className}`}
@@ -679,9 +704,10 @@ export function useNodeResourceUrl(node: CanvasNodeData, eager: boolean, variant
     return { url: current.url, loading: current.loading, originalWidth: isThumbnail ? current.originalWidth : undefined, originalHeight: isThumbnail ? current.originalHeight : undefined };
 }
 
-export function useNearViewport(ref: RefObject<Element | null>) {
+export function useNearViewport(ref: RefObject<Element | null>, enabled = true) {
     const [nearViewport, setNearViewport] = useState(false);
     useEffect(() => {
+        if (!enabled || nearViewport) return;
         const element = ref.current;
         if (!element || typeof IntersectionObserver === "undefined") {
             setNearViewport(true);
@@ -698,7 +724,7 @@ export function useNearViewport(ref: RefObject<Element | null>) {
         );
         observer.observe(element);
         return () => observer.disconnect();
-    }, [ref]);
+    }, [enabled, nearViewport, ref]);
     return nearViewport;
 }
 

@@ -3,7 +3,7 @@ package app
 import (
 	"strings"
 
-	"infinite-canvas/backend/internal/model"
+	"yingce/backend/internal/model"
 )
 
 // LogicalModelQuote 是创作端当前参数命中的实际供应线路报价。
@@ -101,7 +101,7 @@ func (s *Service) QuoteLogicalModel(logicalModelID string, intent ModelRequestIn
 		if routed.PriceTier != nil {
 			priceTierID = routed.PriceTier.ID
 		}
-		order, billingErr := s.newBillingOrderWithPriceTier("", "", "quote", routed.ChannelModel.ChannelID, routed.ChannelModel.ModelKey, capability, "model_quote", quantity, tokenEstimate, priceTierID)
+		order, billingErr := s.newBillingOrderWithPriceTier("", "", "quote", routed.ChannelModel.ChannelID, routed.ChannelModel.ModelKey, capability, "model_quote", quantity, tokenEstimate, priceTierID, resolvedIntent)
 		if billingErr != nil {
 			return nil, billingErr
 		}

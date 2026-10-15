@@ -15,7 +15,7 @@ import { openWorkspaceWallet } from "@/lib/workspace-wallet";
 const PAGE_TITLES: Record<string, string> = {
     home: "创作",
     create: "创作",
-    projects: "短剧 Agent",
+    projects: "短剧制作",
     canvas: "自由画布",
     tasks: "创作历史",
     assets: "资产",

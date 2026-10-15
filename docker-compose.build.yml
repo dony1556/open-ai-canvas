@@ -7,6 +7,12 @@ services:
       args:
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
 
+  yingce-agent:
+    image: open-ai-canvas-yingce-agent:server
+    build:
+      context: .
+      dockerfile: yingce-agent/Dockerfile
+
   backend:
     image: open-ai-canvas-backend:server
     build:
@@ -14,18 +20,6 @@ services:
       dockerfile: backend/Dockerfile
       args:
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
-
-  # v1.6.1 新增的独立 Agent 运行时（yingce-agent）。
-  # 上游 docker-compose.deploy.yml 只给了 GHCR 镜像引用：
-  #     image: ${CANVAS_YINGCE_AGENT_IMAGE:-ghcr.io/ddcat-ai/open-ai-canvas-yingce-agent:${CANVAS_IMAGE_TAG:?...}}
-  # 而本机是「拉源码 + 本地构建」，既不能拉 GHCR，也没有 CANVAS_IMAGE_TAG，
-  # 该 `:?` 插值会让整个 `compose config` 直接失败。这里像 backend/web 一样
-  # 补一份本地构建，让 image 由本地构建结果提供（覆盖 deploy.yml 里的插值表达式）。
-  yingce-agent:
-    image: open-ai-canvas-yingce-agent:server
-    build:
-      context: .
-      dockerfile: yingce-agent/Dockerfile
 
   web:
     image: open-ai-canvas-web:server

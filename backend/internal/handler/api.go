@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"infinite-canvas/backend/internal/service"
+	"yingce/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,6 +35,7 @@ func RegisterCanvasAPI(api *gin.RouterGroup, svc *service.Service) {
 	RegisterSystemProxyRoutes(api, svc)
 	RegisterCustomRelayRoutes(api, svc)
 	RegisterTaskRoutes(api, svc)
+	RegisterWorkbenchRoutes(api, svc)
 	RegisterRunningHubRoutes(api, svc)
 	RegisterSkillRoutes(api, svc)
 	RegisterToolRoutes(api, svc)
@@ -42,6 +43,7 @@ func RegisterCanvasAPI(api *gin.RouterGroup, svc *service.Service) {
 	RegisterChunkedUploadRoutes(api, svc)
 	RegisterDiagnosticsRoutes(api, svc)
 	RegisterPluginRoutes(api, svc)
+	RegisterLibraryRoutes(api, svc)
 	projectAPI := api.Group("")
 	projectAPI.Use(RequireFeature(svc, service.FeatureShortDrama))
 	RegisterProjectRoutes(projectAPI, svc)

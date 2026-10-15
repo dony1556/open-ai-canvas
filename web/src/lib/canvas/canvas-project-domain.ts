@@ -120,6 +120,13 @@ export function storyboardRowsOutputContract(requirement: string) {
     ].join("\n");
 }
 
+// 旧版本会把项目画风执行规范追加到分镜剧情末尾；分镜规划只保留用户原始剧情。
+export function stripProjectStyleExecutionBlocks(prompt: string): string {
+    const marker = "【项目画风执行规范】";
+    const markerIndex = prompt.indexOf(marker);
+    return (markerIndex >= 0 ? prompt.slice(0, markerIndex) : prompt).trim();
+}
+
 // 分镜文本任务实际发出的 prompt：技能上下文只描述工作流、不约束输出结构，画布节点和章节分镜又都没有
 // metadata.promptTemplateOperation（后端只在有该字段时编译服务端模板），所以契约必须由调用方显式拼上，
 // 否则模型按自然语言习惯返回 Markdown 表格或直接续写正文，解析阶段拿不到 rows。
@@ -468,6 +475,7 @@ export function sameNodeSemanticData(left: CanvasNodeData, right: CanvasNodeData
 }
 
 export function applyBatchPrimaryImage(root: CanvasNodeData, primary: CanvasNodeData): CanvasNodeData {
+    if (root.metadata?.imageLayerGroup || root.metadata?.experimentalLayerPlan) return root;
     // 主图是根节点对媒体的完整代理；可选字段也必须显式覆盖，避免残留上一张图的存储身份。
     return {
         ...root,
@@ -496,6 +504,7 @@ export function removeCanvasNodes(nodes: CanvasNodeData[], requestedIds: Set<str
     const removedIds = new Set(requestedIds);
     nodes.forEach((node) => {
         if (requestedIds.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => removedIds.add(childId));
+        if (requestedIds.has(node.id)) node.metadata?.experimentalLayerPlan?.requests.forEach((request) => removedIds.add(request.nodeId));
     });
     const remainingNodes = nodes.filter((node) => !removedIds.has(node.id));
     const cleanedNodes = remainingNodes.map((node) => {
@@ -523,7 +532,18 @@ export function removeCanvasNodes(nodes: CanvasNodeData[], requestedIds: Set<str
         if (!cleaned.metadata?.isBatchRoot || childIds?.length === cleaned.metadata.batchChildIds?.length) return cleaned;
         const primaryImageId = childIds?.includes(cleaned.metadata.primaryImageId || "") ? cleaned.metadata.primaryImageId : childIds?.[0];
         const primaryNode = remainingNodes.find((item) => item.id === primaryImageId);
-        const batchRoot = { ...cleaned, metadata: { ...cleaned.metadata, batchChildIds: childIds, primaryImageId } };
+        const plan = cleaned.metadata.experimentalLayerPlan;
+        const requests = plan?.requests.filter((request) => !removedIds.has(request.nodeId));
+        const batchRoot = { ...cleaned, metadata: { ...cleaned.metadata, batchChildIds: childIds, primaryImageId, ...(plan ? { experimentalLayerPlan: requests?.length ? { ...plan, requests, composedSignature: undefined, errorSignature: undefined } : undefined } : {}) } };
+        if (cleaned.metadata.imageLayerGroup)
+            return {
+                ...batchRoot,
+                metadata: {
+                    ...batchRoot.metadata,
+                    primaryImageId: undefined,
+                    imageLayerGroup: { ...cleaned.metadata.imageLayerGroup, compositeStatus: "updating" as const, layers: cleaned.metadata.imageLayerGroup.layers.filter((layer) => !removedIds.has(layer.nodeId)) },
+                },
+            };
         return primaryNode ? applyBatchPrimaryImage(batchRoot, primaryNode) : batchRoot;
     });
     const nextNodes = cleanedNodes.map((node) => reconcileImageBatchRoot(node, cleanedNodes));

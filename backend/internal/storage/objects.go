@@ -13,8 +13,6 @@ import (
 	qiniuAuth "github.com/qiniu/go-sdk/v7/auth"
 	qiniuStorage "github.com/qiniu/go-sdk/v7/storage"
 	cos "github.com/tencentyun/cos-go-sdk-v5"
-	"infinite-canvas/backend/internal/kernel"
-	"infinite-canvas/backend/internal/outbound"
 	"io"
 	"mime"
 	"net"
@@ -24,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"yingce/backend/internal/kernel"
+	"yingce/backend/internal/outbound"
 )
 
 func transferTimeout(setting Settings) time.Duration {
@@ -246,6 +246,28 @@ func signedOriginObjectURL(setting Settings, objectKey string, signing objectURL
 func SignedOriginObjectDownloadURL(setting Settings, objectKey string, expiresAt time.Time, fileName string) (string, error) {
 	disposition := objectDownloadContentDisposition(fileName, objectKey)
 	return signedOriginObjectURL(setting, objectKey, objectURLSigning{ExpiresAt: expiresAt, ContentDisposition: disposition})
+}
+
+// PublicCDNObjectDownloadURL returns a public CDN URL that asks the object
+// storage origin to emit an attachment response. The query parameter keeps
+// ordinary display URLs inline while allowing a browser to download this one
+// without routing object bytes through the application server.
+//
+// Public CDN deployments must preserve response-content-disposition when
+// forwarding requests to the object store.
+func PublicCDNObjectDownloadURL(setting Settings, objectKey string, fileName string) (string, error) {
+	value, err := OssCDNObjectURL(setting.CDNBaseURL, objectKey)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("response-content-disposition", objectDownloadContentDisposition(fileName, objectKey))
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func objectDownloadContentDisposition(fileName string, objectKey string) string {

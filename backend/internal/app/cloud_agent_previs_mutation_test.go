@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"infinite-canvas/backend/internal/model"
+	"yingce/backend/internal/model"
 )
 
 func previsMutationFixture(t *testing.T) (*Service, *model.CanvasProject) {
@@ -492,6 +492,24 @@ func TestCloudAgentPrevisPatchLimitsAndClosedArguments(t *testing.T) {
 
 	if _, err := cloudAgentPrevisSceneCreateTemplate(cloudAgentPrevisSceneCreateArgs{SceneID: "scene", Title: "场景", TemplateID: "unknown"}); err == nil {
 		t.Fatal("unknown Previs template was accepted")
+	}
+}
+
+func TestCloudAgentPrevisOrdinaryActorNameDoesNotRequireCharacterBinding(t *testing.T) {
+	scene, err := cloudAgentPrevisSceneCreateTemplate(cloudAgentPrevisSceneCreateArgs{SceneID: "image-scene", Title: "图片复现", TemplateID: "empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cloudAgentPrevisApplyPatchOperation(scene, cloudAgentPrevisPatchOperation{
+		Type: "object_add", ID: "image-actor", Kind: "actor", Primitive: "character",
+		Name: previsStringPtr("道姑"), CharacterName: previsStringPtr("道姑"), Pose: "stand",
+	}, 0)
+	if err != nil {
+		t.Fatalf("ordinary image actor was treated as a character binding: %v", err)
+	}
+	actor := cloudAgentPrevisFindByID(creationMaps(scene["objects"]), "image-actor")
+	if actor == nil || actor["characterBinding"] != nil {
+		t.Fatalf("ordinary actor unexpectedly has character binding: %#v", actor)
 	}
 }
 

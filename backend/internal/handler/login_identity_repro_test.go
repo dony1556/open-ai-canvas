@@ -11,10 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/platform"
-	"infinite-canvas/backend/internal/repository"
-	"infinite-canvas/backend/internal/service"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/platform"
+	"yingce/backend/internal/repository"
+	"yingce/backend/internal/service"
 )
 
 func TestLoginIdentityAliasSharesThrottle(t *testing.T) {
@@ -37,7 +37,7 @@ func testLoginIdentityAttempts(t *testing.T, accounts []string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.SystemSetting{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.LoginLog{}, &model.SystemSetting{}); err != nil {
 		t.Fatal(err)
 	}
 	sqlDB, _ := db.DB()

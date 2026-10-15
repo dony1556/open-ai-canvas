@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -209,7 +209,7 @@ func TestAdminReferencesIncludeExistingDisplayNameGroups(t *testing.T) {
 			groups[name]++
 		}
 	}
-	if len(groups) != 3 || groups["Shared"] != 1 || groups["Other"] != 1 || groups["d"] != 1 {
+	if len(groups) != 2 || groups["Shared"] != 1 || groups["Other"] != 1 {
 		t.Fatalf("groups = %#v", groups)
 	}
 }

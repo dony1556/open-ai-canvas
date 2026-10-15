@@ -23,6 +23,8 @@ export type LocalUser = {
     phoneVerifiedAt?: string;
     displayName: string;
     avatarUrl?: string;
+    avatarMode?: "custom" | "default" | "";
+    avatarPreset?: string;
     identityProvider?: string;
     identityId?: string;
     identityUsername?: string;
@@ -126,7 +128,7 @@ export type AdminAuditEvent = {
 export type AdminUserDetail = {
     user: LocalUser;
     account: { userId: string; availableMicrocredits: number; reservedMicrocredits: number; version: number };
-    counts: { ledgerEntries: number; tasks: number; apiCalls: number; auditEvents: number };
+    counts: { ledgerEntries: number; tasks: number; apiCalls: number; auditEvents: number; rechargeMicrocredits: number; checkinMicrocredits: number };
     storageUsage: {
         assetCount: number;
         assetBytes: number;
@@ -188,9 +190,11 @@ export type AdminAnalytics = {
         successRate: number;
         p95DurationMs: number;
         currentQueuedTasks: number;
+        totalBalanceMicrocredits?: number;
+        totalConsumedMicrocredits?: number;
         finance?: AnalyticsFinance | null;
     };
-    trend: Array<{ day: string; tasks: number; requests: number; activeUsers: number; requestSuccessRate: number }>;
+    trend: Array<{ day: string; tasks: number; requests: number; activeUsers: number; requestSuccessRate: number; consumedMicrocredits?: number }>;
     models: Array<{
         model: string;
         capability: string;
@@ -439,7 +443,7 @@ export function getAdminFeatureAvailability() {
 }
 
 export function updateAdminFeatureAvailability(
-    features: Partial<Pick<FeatureAvailability, "welcomeEnabled" | "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled" | "frontendModelsEnabled" | "pluginCenterEnabled" | "systemPluginsVisibleToUsers">>,
+    features: Partial<Pick<FeatureAvailability, "welcomeEnabled" | "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled" | "frontendModelsEnabled" | "pluginCenterEnabled" | "systemPluginsVisibleToUsers" | "inspirationSourcesVisible" | "imageWorkbenchEnabled" | "videoWorkbenchEnabled">>,
 ) {
     return http.patch<{ features: FeatureAvailability }>("/admin/settings/features", features);
 }

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { AlertCircle, BookOpenCheck, CheckCircle2, ChevronRight, Clapperboard, Copy, Download, Image as ImageIcon, Lock, Maximize2, Music2, Pencil, RefreshCw, ScanSearch, Settings2, Star, Trash2, Type, UserRound, Video, WandSparkles } from "lucide-react";
 
 import { useCanvasNodeActions } from "./canvas-node-action-context";
+import { CanvasImageLayerControls } from "./canvas-image-layer-controls";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import type { CanvasNodeRenderLOD } from "@/lib/canvas/canvas-node-lod";
@@ -13,10 +14,11 @@ import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type CanvasNodeTypeId, type Position } from "@/types/canvas";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { ART_CRITIQUE_NODE_TYPE } from "@/lib/art-critique/contracts";
-import { getNodeDefinition, getNodeMinSize, shouldKeepAspectRatio } from "@/lib/canvas/node-registry";
+import { getNodeDefinition } from "@/lib/canvas/node-registry";
+import type { NodeResizeCorner } from "@/lib/canvas/node-resize-geometry";
+import { useCanvasNodeResize } from "./use-canvas-node-resize";
 import { CanvasNodeContent, CanvasNodeImageInfo, CanvasNodeProducedModel } from "./canvas-node-content";
 
-type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 type CanvasTheme = (typeof canvasThemes)[keyof typeof canvasThemes];
 
 type CanvasNodeProps = {
@@ -32,7 +34,7 @@ type CanvasNodeProps = {
     connectionApproach?: Position;
     forceInputVisible?: boolean;
     showImageInfo: boolean;
-    reduceMediaEffects?: boolean;
+    disableMediaEffects?: boolean;
     readOnly?: boolean;
     resourceLabel?: CanvasResourceReference;
     mentionReferences?: CanvasResourceReference[];
@@ -58,7 +60,6 @@ type CanvasNodeProps = {
     onRetry?: (node: CanvasNodeData) => void;
     onReloadResource?: (node: CanvasNodeData) => void;
     onOpenTaskDetails?: (node: CanvasNodeData) => void;
-    onOpenVersions?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
     onReplaceMedia?: (node: CanvasNodeData) => void;
     onOpenTextEditor?: (node: CanvasNodeData) => void;
@@ -81,7 +82,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     connectionApproach,
     forceInputVisible = false,
     showImageInfo,
-    reduceMediaEffects = false,
+    disableMediaEffects = false,
     readOnly = false,
     resourceLabel,
     mentionReferences = [],
@@ -107,7 +108,6 @@ export const CanvasNode = React.memo(function CanvasNode({
     onRetry,
     onReloadResource,
     onOpenTaskDetails,
-    onOpenVersions,
     onViewImage,
     onOpenTextEditor,
     onOpenPrevis,
@@ -129,7 +129,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const hasMediaContent = hasImageContent || hasVideoContent || hasAudioContent;
     const producedModelStored = data.metadata?.producedModel;
     const showProducedModel = showImageInfo && hasMediaContent && Boolean(producedModelStored);
-    const isBatchRoot = data.type === CanvasNodeType.Image && Boolean(data.metadata?.isBatchRoot) && batchCount > 1;
+    const isBatchRoot = data.type === CanvasNodeType.Image && Boolean(data.metadata?.isBatchRoot) && (batchCount > 1 || Boolean(data.metadata?.imageLayerGroup));
     const isBatchChild = data.type === CanvasNodeType.Image && Boolean(data.metadata?.batchRootId);
     const showStatusTrack = Boolean(resourceLabel || data.metadata?.locked || isBatchRoot || (isBatchChild && !readOnly) || (hasMediaContent && !readOnly));
     const isActive = isConnectionTarget || isSelected || isFocusRelated;
@@ -140,18 +140,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const assetTags = data.metadata?.assetTags?.filter((tag) => tag.trim()) || [];
     const scriptMinHeight = data.type === CanvasNodeType.Script ? storyboardMinNodeHeight(data.metadata?.storyboardComposerHeight) : null;
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const resizeRef = useRef({
-        isResizing: false,
-        corner: "bottom-right" as ResizeCorner,
-        startX: 0,
-        startY: 0,
-        startLeft: 0,
-        startTop: 0,
-        startWidth: 0,
-        startHeight: 0,
-        keepRatio: false,
-        ratio: 1,
-    });
+    const handleResizePointerDown = useCanvasNodeResize(data, scale, scriptMinHeight, onResize, readOnly);
 
     useEffect(() => {
         const textarea = textareaRef.current;
@@ -188,81 +177,6 @@ export const CanvasNode = React.memo(function CanvasNode({
         return () => window.removeEventListener("pointerdown", handleOutsidePointerDown, true);
     }, [isEditingContent]);
 
-    const handleResizeMove = useCallback(
-        (event: MouseEvent) => {
-            if (!resizeRef.current.isResizing) return;
-
-            const dx = (event.clientX - resizeRef.current.startX) / scale;
-            const dy = (event.clientY - resizeRef.current.startY) / scale;
-            const minSize = getNodeMinSize(data.type);
-            const minWidth = minSize.width;
-            // 分镜脚本的高度由表格内容动态撑开，覆盖注册表里的静态下限。
-            const minHeight = scriptMinHeight || minSize.height;
-            const startRight = resizeRef.current.startLeft + resizeRef.current.startWidth;
-            const startBottom = resizeRef.current.startTop + resizeRef.current.startHeight;
-            const fromLeft = resizeRef.current.corner.includes("left");
-            const fromTop = resizeRef.current.corner.includes("top");
-            const rawWidth = Math.max(minWidth, resizeRef.current.startWidth + (fromLeft ? -dx : dx));
-            const rawHeight = Math.max(minHeight, resizeRef.current.startHeight + (fromTop ? -dy : dy));
-            let width = rawWidth;
-            let height = rawHeight;
-            if (resizeRef.current.keepRatio) {
-                const ratio = resizeRef.current.ratio;
-                if (Math.abs(dx) >= Math.abs(dy)) {
-                    height = width / ratio;
-                } else {
-                    width = height * ratio;
-                }
-                if (height < minHeight) {
-                    height = minHeight;
-                    width = height * ratio;
-                }
-                if (width < minWidth) {
-                    width = minWidth;
-                    height = width / ratio;
-                }
-            }
-
-            onResize(data.id, width, height, {
-                x: fromLeft ? startRight - width : resizeRef.current.startLeft,
-                y: fromTop ? startBottom - height : resizeRef.current.startTop,
-            });
-        },
-        [data.id, data.type, onResize, scale, scriptMinHeight],
-    );
-
-    const handleResizeUp = useCallback(() => {
-        resizeRef.current.isResizing = false;
-        window.removeEventListener("mousemove", handleResizeMove);
-        window.removeEventListener("mouseup", handleResizeUp);
-    }, [handleResizeMove]);
-
-    const handleResizeMouseDown = (event: React.MouseEvent, corner: ResizeCorner) => {
-        event.stopPropagation();
-        event.preventDefault();
-        resizeRef.current = {
-            isResizing: true,
-            corner,
-            startX: event.clientX,
-            startY: event.clientY,
-            startLeft: data.position.x,
-            startTop: data.position.y,
-            startWidth: data.width,
-            startHeight: data.height,
-            keepRatio: shouldKeepAspectRatio(data),
-            ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
-        };
-        window.addEventListener("mousemove", handleResizeMove);
-        window.addEventListener("mouseup", handleResizeUp);
-    };
-
-    useEffect(() => {
-        return () => {
-            window.removeEventListener("mousemove", handleResizeMove);
-            window.removeEventListener("mouseup", handleResizeUp);
-        };
-    }, [handleResizeMove, handleResizeUp]);
-
     const commitTitle = () => {
         const next = titleDraft.trim();
         setIsEditingTitle(false);
@@ -273,7 +187,7 @@ export const CanvasNode = React.memo(function CanvasNode({
         if (next !== data.title) onTitleChange?.(data.id, next);
     };
 
-    const connectionTilt = isConnectionTarget && !reduceMediaEffects && !dragOffset
+    const connectionTilt = isConnectionTarget && !disableMediaEffects && !dragOffset
         ? canvasConnectionTilt(data, connectionApproach) : undefined;
 
     return (
@@ -401,7 +315,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         onReloadResource={onReloadResource}
                         onOpenTaskDetails={onOpenTaskDetails}
                         onToggleBatch={() => onToggleBatch?.(data.id)}
-                        reduceMediaEffects={reduceMediaEffects}
+                        disableMediaEffects={disableMediaEffects}
                         mediaActive={mediaActive}
                         onMediaPlayRequest={onMediaPlayRequest}
                     />
@@ -426,30 +340,13 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </div>
                 ) : null}
 
-                {showChrome && data.metadata?.versionLabel ? (
-                    <button
-                        type="button"
-                        className="absolute left-3 top-3 z-[var(--node-z-overlay)] grid size-7 place-items-center rounded-[var(--r-full)] border p-0.5 text-[var(--node-badge-fs)] font-semibold leading-none backdrop-blur-md transition-[transform,background,border-color,box-shadow] hover:-translate-y-px focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 motion-reduce:hover:translate-y-0"
-                        style={{
-                            background: data.metadata.versionPrimary ? theme.accent.primarySoft : theme.toolbar.panel,
-                            borderColor: data.metadata.versionPrimary ? theme.accent.primary : theme.toolbar.border,
-                            color: data.metadata.versionPrimary ? theme.accent.primary : theme.node.text,
-                            outlineColor: theme.accent.primary,
-                        }}
-                        title={data.metadata.versionLabel + (data.metadata.versionPrimary ? " · 主版本" : "") + "，点击查看版本对比"}
-                        aria-label={data.metadata.versionLabel + (data.metadata.versionPrimary ? "，主版本" : "") + "，查看版本对比"}
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => { event.stopPropagation(); onOpenVersions?.(data); }}
-                    >
-                        {data.metadata.versionLabel}
-                    </button>
-                ) : null}
                 {showChrome && showStatusTrack ? (
-                    <div className={`absolute right-3 top-3 z-[var(--node-z-overlay)] flex min-w-0 items-center justify-end gap-1 ${data.metadata?.versionLabel ? "max-w-[calc(100%-104px)]" : "max-w-[calc(100%-24px)]"}`}>
+                    <div className="absolute right-3 top-3 z-[var(--node-z-overlay)] flex min-w-0 items-center justify-end gap-1 max-w-[calc(100%-24px)]">
                         {resourceLabel && data.type !== CanvasNodeType.Image ? <ResourceLabelBadge reference={resourceLabel} theme={theme} /> : null}
                         {hasMediaContent && !readOnly ? <ResourceStorageBadge storageKey={data.metadata?.storageKey} active={isActive} theme={theme} /> : null}
                         {isBatchRoot ? <BatchToggleBadge count={batchCount} expanded={batchExpanded} theme={theme} onToggle={() => onToggleBatch?.(data.id)} /> : null}
-                        {isBatchChild && !readOnly ? <BatchPrimaryBadge visible={batchPrimary || hovered || isSelected} selected={batchPrimary} theme={theme} onSelect={() => onSetBatchPrimary?.(data)} /> : null}
+                        {data.metadata?.imageLayerGroup && !readOnly ? <CanvasImageLayerControls node={data} /> : null}
+                        {isBatchChild && !data.metadata?.imageLayer && !data.metadata?.layerExtraction && !readOnly ? <BatchPrimaryBadge visible={batchPrimary || hovered || isSelected} selected={batchPrimary} theme={theme} onSelect={() => onSetBatchPrimary?.(data)} /> : null}
                         {data.metadata?.locked ? <NodeLockBadge theme={theme} /> : null}
                     </div>
                 ) : null}
@@ -463,7 +360,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         <div className="flex items-center gap-0.5 rounded-[var(--r-md)] border px-1 py-1 backdrop-blur-xl" style={{ background: `${theme.toolbar.panel}e6`, borderColor: theme.toolbar.border }}>
                             {hasImageContent ? <BatchChildActionButton theme={theme} label="下载图片" icon={<Download className="size-3.5" />} onClick={() => downloadNode?.(data)} /> : null}
                             {hasImageContent ? <BatchChildActionButton theme={theme} label="创建副本" icon={<Copy className="size-3.5" />} onClick={() => duplicateNode?.(data)} /> : null}
-                            {hasImageContent ? (
+                            {hasImageContent && !data.metadata?.imageLayer && !data.metadata?.layerExtraction ? (
                                 <BatchChildActionButton theme={theme} label={batchPrimary ? "当前主图" : "设为主图"} icon={<Star className={`size-3.5 ${batchPrimary ? "fill-current" : ""}`} style={{ color: theme.accent.primary }} />} onClick={() => onSetBatchPrimary?.(data)} />
                             ) : null}
                             {data.metadata?.status === "error" && data.metadata.resourceReloadAvailable ? <BatchChildActionButton theme={theme} label="重新加载资源" icon={<Download className="size-3.5" />} onClick={() => onReloadResource?.(data)} /> : null}
@@ -473,9 +370,9 @@ export const CanvasNode = React.memo(function CanvasNode({
                     </div>
                 ) : null}
                 {/* 批次主图位（折叠根节点封面）常驻下载按钮 */}
-                {showChrome && isBatchRoot && hasImageContent && !readOnly ? (
+                {showChrome && isBatchRoot && hasImageContent && !readOnly && (!data.metadata?.imageLayerGroup?.compositeStatus || data.metadata.imageLayerGroup.compositeStatus === "ready") ? (
                     <div className="absolute bottom-2 right-2 z-[var(--node-z-overlay)]" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
-                        <BatchChildActionButton theme={theme} label="下载主图" icon={<Download className="size-3.5" />} onClick={() => downloadNode?.(data)} />
+                        <BatchChildActionButton theme={theme} label={data.metadata?.imageLayerGroup ? "下载合成图" : "下载主图"} icon={<Download className="size-3.5" />} onClick={() => downloadNode?.(data)} />
                     </div>
                 ) : null}
                 {showChrome && (assetTags.length || showProducedModel || (showImageInfo && hasImageContent)) ? (
@@ -489,10 +386,10 @@ export const CanvasNode = React.memo(function CanvasNode({
                 ) : null}
 
                 {showChrome && !readOnly && !data.metadata?.locked && (isSelected || hovered) ? <>
-                    <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} />
-                    <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} />
-                    <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} />
-                    <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} />
+                    <ResizeHandle corner="top-left" onPointerDown={handleResizePointerDown} />
+                    <ResizeHandle corner="top-right" onPointerDown={handleResizePointerDown} />
+                    <ResizeHandle corner="bottom-left" onPointerDown={handleResizePointerDown} />
+                    <ResizeHandle corner="bottom-right" onPointerDown={handleResizePointerDown} />
                 </> : null}
             </div>
 
@@ -519,7 +416,7 @@ function areCanvasNodePropsEqual(previous: CanvasNodeProps, next: CanvasNodeProp
         previous.connectionApproach?.y === next.connectionApproach?.y &&
         previous.forceInputVisible === next.forceInputVisible &&
         previous.showImageInfo === next.showImageInfo &&
-        previous.reduceMediaEffects === next.reduceMediaEffects &&
+        previous.disableMediaEffects === next.disableMediaEffects &&
         previous.readOnly === next.readOnly &&
         previous.resourceLabel === next.resourceLabel &&
         previous.mentionReferences === next.mentionReferences &&
@@ -547,7 +444,6 @@ function areCanvasNodePropsEqual(previous: CanvasNodeProps, next: CanvasNodeProp
         previous.onRetry === next.onRetry &&
         previous.onReloadResource === next.onReloadResource &&
         previous.onOpenTaskDetails === next.onOpenTaskDetails &&
-        previous.onOpenVersions === next.onOpenVersions &&
         previous.onViewImage === next.onViewImage &&
         previous.onReplaceMedia === next.onReplaceMedia &&
         previous.onOpenTextEditor === next.onOpenTextEditor &&
@@ -631,7 +527,7 @@ function AssetTagBadges({ tags, theme }: { tags: string[]; theme: (typeof canvas
     );
 }
 
-function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDown: (event: React.MouseEvent, corner: ResizeCorner) => void }) {
+function ResizeHandle({ corner, onPointerDown }: { corner: NodeResizeCorner; onPointerDown: (event: React.PointerEvent<HTMLDivElement>, corner: NodeResizeCorner) => void }) {
     const positionClass = {
         "top-left": "-left-[14px] -top-[14px] cursor-nwse-resize",
         "top-right": "-right-[14px] -top-[14px] cursor-nesw-resize",
@@ -639,7 +535,7 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
         "bottom-right": "-bottom-[14px] -right-[14px] cursor-nwse-resize",
     }[corner];
 
-    return <div className={`absolute z-[var(--node-z-handle)] size-7 ${positionClass}`} onMouseDown={(event) => onMouseDown(event, corner)} />;
+    return <div data-resize-corner={corner} className={`absolute z-[var(--node-z-handle)] size-7 touch-none ${positionClass}`} onPointerDown={(event) => onPointerDown(event, corner)} onMouseDown={(event) => event.stopPropagation()} />;
 }
 
 const NODE_EXTERNAL_HEADER_MIN_SCALE = 0.35;

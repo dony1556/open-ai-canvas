@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"infinite-canvas/backend/internal/model"
+	"yingce/backend/internal/model"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -85,7 +85,7 @@ func (r *Repository) ActiveBannerAnnouncements(now time.Time) ([]model.BannerAnn
 		Where("status = ?", "active").
 		Where("starts_at IS NULL OR starts_at <= ?", now).
 		Where("ends_at IS NULL OR ends_at >= ?", now).
-		Order("created_at desc").
+		Order("sort_order asc, created_at desc").
 		Find(&banners).Error
 	decodeBannerTitleRuns(banners)
 	return banners, err
@@ -104,7 +104,7 @@ func (r *Repository) AdminBannerAnnouncements(keyword string, status string, lim
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := query.Order("created_at desc").Limit(limit).Offset(offset).Find(&banners).Error; err != nil {
+	if err := query.Order("sort_order asc, created_at desc").Limit(limit).Offset(offset).Find(&banners).Error; err != nil {
 		return nil, 0, err
 	}
 	decodeBannerTitleRuns(banners)

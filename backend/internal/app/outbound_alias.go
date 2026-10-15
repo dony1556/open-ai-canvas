@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"time"
 
-	"infinite-canvas/backend/internal/outbound"
+	"yingce/backend/internal/outbound"
 )
 
 // Outbound 符号从 internal/outbound 再导出，保持 service/handler 调用面稳定。
@@ -26,8 +26,17 @@ func ValidateCustomRelayURL(rawURL string) (*url.URL, error) {
 	return parsed, mapOutboundError(err)
 }
 
+func ValidateProxyURL(rawURL string) (*url.URL, error) {
+	parsed, err := outbound.ValidateProxyURL(rawURL)
+	return parsed, mapOutboundError(err)
+}
+
 func OutboundHTTPClient(timeout time.Duration) *http.Client {
 	return outbound.OutboundHTTPClient(timeout)
+}
+
+func OutboundHTTPClientWithProxy(timeout time.Duration, proxyURL string) *http.Client {
+	return outbound.OutboundHTTPClientWithProxy(timeout, proxyURL)
 }
 
 func ApplyDefaultOutboundHeaders(req *http.Request) {

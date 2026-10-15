@@ -2,10 +2,10 @@ package handler
 
 import (
 	"github.com/gin-gonic/gin"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/service"
 	"net/http"
 	"time"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/service"
 )
 
 func registerNotificationRoutes(r *gin.RouterGroup, svc *service.Service) {
@@ -39,7 +39,7 @@ func registerNotificationRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, result)
 	})
-	r.POST("/auth/verification/login", func(c *gin.Context) {
+	r.POST("/auth/verification/login", rejectedLoginAudit(svc, "verification"), func(c *gin.Context) {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 		var req service.VerificationConfirm
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -49,6 +49,8 @@ func registerNotificationRoutes(r *gin.RouterGroup, svc *service.Service) {
 		if !enforceRateLimit(c, "verification-login:"+c.ClientIP(), 30, time.Hour) {
 			return
 		}
+		req.LoginContext = loginRequestContext(c)
+		c.Set("login_audit_handled", true)
 		result, err := svc.LoginVerification(req)
 		if err != nil {
 			failService(c, err)

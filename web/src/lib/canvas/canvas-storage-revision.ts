@@ -15,6 +15,8 @@ export type CanvasStorageDocument = {
     state: { projects: CanvasProject[] };
     version: number;
     storageRevision: number;
+    savedAt?: string;
+    journalTokens?: Record<string, number>;
     tombstones: CanvasStorageTombstones;
 };
 
@@ -73,6 +75,8 @@ export function parseCanvasStorageDocument(value: string | null, fallback: Canva
         state?: { projects?: unknown };
         version?: unknown;
         storageRevision?: unknown;
+        savedAt?: unknown;
+        journalTokens?: unknown;
         tombstones?: unknown;
     };
     if (!Array.isArray(parsed.state?.projects)) throw new Error("画布持久状态无效");
@@ -80,6 +84,8 @@ export function parseCanvasStorageDocument(value: string | null, fallback: Canva
         state: { projects: normalizeProjectAssetCategories(parsed.state.projects as CanvasProject[]) },
         version: typeof parsed.version === "number" ? parsed.version : 0,
         storageRevision: typeof parsed.storageRevision === "number" && Number.isFinite(parsed.storageRevision) ? parsed.storageRevision : 0,
+        savedAt: typeof parsed.savedAt === "string" && parsed.savedAt ? parsed.savedAt : undefined,
+        journalTokens: recordOfNumbers(parsed.journalTokens),
         tombstones: normalizeTombstones(parsed.tombstones),
     };
 }
@@ -219,6 +225,12 @@ function mergeEntities<T extends { id: string }>(input: {
         const durable = durableById.get(id);
 
         if (base && !local) {
+            // A concurrent durable edit must not be erased by a stale local delete.
+            // Keep the durable branch and surface a conflict for the caller.
+            if (durable && !deepEqual(base, durable)) {
+                input.conflicts.push(input.conflict(id));
+                continue;
+            }
             remove(id);
             input.tombstones[id] = input.nextRevision;
             continue;
@@ -227,7 +239,12 @@ function mergeEntities<T extends { id: string }>(input: {
 
         if (!durable) {
             if (base || (input.tombstones[id] ?? 0) > input.baseRevision) {
+                // A local recreation is still user work. Record the concurrent
+                // deletion, but keep the node and clear the stale tombstone so a
+                // later rebase cannot suppress the same ID forever.
                 input.conflicts.push(input.conflict(id));
+                delete input.tombstones[id];
+                set(local);
                 continue;
             }
             delete input.tombstones[id];
@@ -303,12 +320,7 @@ function mergeSessions(input: {
 }
 
 function mergeProject(base: CanvasProject | undefined, local: CanvasProject, durable: CanvasProject, document: CanvasStorageDocument, baseRevision: number, nextRevision: number, conflicts: CanvasStorageConflict[]) {
-    if (local.revision !== durable.revision) {
-        // Never attach another tab's newer server revision to this tab's stale edits.
-        // Preserve the whole edited branch; the server will reject its stale revision.
-        if (local.revision === base?.revision && sameCanvasContent(base, local)) return { ...durable, viewport: local.viewport };
-        return local;
-    }
+    if (local.revision !== durable.revision && local.revision === base?.revision && sameCanvasContent(base, local)) return { ...durable, viewport: local.viewport };
     const common = {
         projectId: local.id,
         tombstones: document.tombstones,
@@ -320,7 +332,7 @@ function mergeProject(base: CanvasProject | undefined, local: CanvasProject, dur
         (base || {}) as unknown as Record<string, unknown>,
         local as unknown as Record<string, unknown>,
         durable as unknown as Record<string, unknown>,
-        new Set(["nodes", "connections", "chatSessions"]),
+        new Set(["nodes", "connections", "chatSessions", "revision", "remoteContentHash", "viewport"]),
         concurrentConflictRecorder(conflicts, { kind: "project", id: local.id }),
     ) as unknown as CanvasProject;
     merged.nodes = mergeEntities<CanvasNodeData>({
@@ -361,6 +373,9 @@ function mergeProject(base: CanvasProject | undefined, local: CanvasProject, dur
         local: local.chatSessions,
         durable: durable.chatSessions,
     });
+    merged.revision = local.revision ?? durable.revision;
+    merged.viewport = local.viewport;
+    merged.remoteContentHash = undefined;
     return merged;
 }
 

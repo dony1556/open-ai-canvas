@@ -7,11 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/outbound/outboundtest"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/outbound/outboundtest"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -189,15 +190,39 @@ func TestChannelFromRequestStoresAndClearsHeaders(t *testing.T) {
 	}
 }
 
-func TestPublicChannelOnlyReturnsSystemHeadersToAdmin(t *testing.T) {
-	channel := model.ModelChannel{ID: "system-1", Scope: model.ChannelScopeSystem, BaseURL: "https://example.com/v1", HeadersJSON: `[{"name":"X-Gateway-Tenant","value":"tenant-a"}]`}
+func TestChannelFromRequestValidatesProxyURL(t *testing.T) {
+	limit := 4
+	base := model.ModelChannel{}
+	channel, err := channelFromRequest(ChannelRequest{Name: "Proxy", BaseURL: "https://93.184.216.34/v1", ProxyURL: "socks5://user:secret@127.0.0.1:1080", ConcurrencyLimit: &limit}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.ProxyURL != "socks5://user:secret@127.0.0.1:1080" {
+		t.Fatalf("proxy URL = %q", channel.ProxyURL)
+	}
+	for _, proxyURL := range []string{"ftp://127.0.0.1:1080", "socks5://", "socks5://127.0.0.1:1080#fragment", "http://" + strings.Repeat("a", 506)} {
+		_, err := channelFromRequest(ChannelRequest{Name: "Proxy", BaseURL: "https://93.184.216.34/v1", ProxyURL: proxyURL, ConcurrencyLimit: &limit}, base)
+		if err == nil {
+			t.Fatalf("invalid proxy URL %q was accepted", proxyURL)
+		}
+	}
+}
+
+func TestPublicChannelOnlyReturnsSystemHeadersAndProxyToAdmin(t *testing.T) {
+	channel := model.ModelChannel{ID: "system-1", Scope: model.ChannelScopeSystem, BaseURL: "https://example.com/v1", HeadersJSON: `[{"name":"X-Gateway-Tenant","value":"tenant-a"}]`, ProxyURL: "socks5://user:secret@127.0.0.1:1080"}
 	adminView := publicChannel(channel, true, nil)
 	if len(adminView.Headers) != 1 || adminView.Headers[0].Name != "X-Gateway-Tenant" {
 		t.Fatalf("admin headers = %#v", adminView.Headers)
 	}
+	if adminView.ProxyURL != channel.ProxyURL {
+		t.Fatalf("admin proxy URL = %q", adminView.ProxyURL)
+	}
 	userView := publicChannel(channel, false, nil)
 	if len(userView.Headers) != 0 {
 		t.Fatalf("user headers = %#v", userView.Headers)
+	}
+	if userView.ProxyURL != "" {
+		t.Fatalf("user proxy URL = %q", userView.ProxyURL)
 	}
 }
 
@@ -261,6 +286,9 @@ func TestFetchAdminChannelModelsReaddsDeletedModel(t *testing.T) {
 	if active.ID == deleted.ID || active.Enabled || active.PriceConfigured {
 		t.Fatalf("re-added model = %#v", active)
 	}
+	if active.DisplayName != "未分类" || active.ProviderModelKey != "model-a" {
+		t.Fatalf("discovered model defaults = %#v", active)
+	}
 	var total int64
 	if err := db.Unscoped().Model(&model.ChannelModel{}).Where("channel_id = ? AND model_key = ?", channel.ID, "model-a").Count(&total).Error; err != nil {
 		t.Fatal(err)
@@ -313,6 +341,24 @@ func TestImportAdminChannelModelsOnlyImportsSelectedModels(t *testing.T) {
 	}
 	if len(imported) != 1 || imported[0].ModelKey != "model-b" {
 		t.Fatalf("imported models = %#v, want only model-b", imported)
+	}
+	if imported[0].DisplayName != "未分类" || imported[0].ProviderModelKey != "model-b" {
+		t.Fatalf("imported defaults = %#v", imported)
+	}
+	// 已有分组即使与模型 ID 相同，也不能被重复导入重置。
+	if err := db.Model(&imported[0]).Updates(map[string]any{"display_name": "model-b", "channel_label": "手动名称"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err = svc.ImportAdminChannelModels(context.Background(), admin, channel.ID, []string{"model-b"})
+	if err != nil || result.Added != 0 {
+		t.Fatalf("duplicate import = %#v, %v", result, err)
+	}
+	var unchanged model.ChannelModel
+	if err := db.First(&unchanged, "id = ?", imported[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.DisplayName != "model-b" || unchanged.ChannelLabel != "手动名称" {
+		t.Fatalf("duplicate import overwrote existing names: %#v", unchanged)
 	}
 }
 

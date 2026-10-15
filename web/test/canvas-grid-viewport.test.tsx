@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InfiniteCanvas } from "../src/components/canvas/infinite-canvas";
+import { CanvasViewport } from "../src/components/canvas/canvas-viewport";
 import { canvasAppearanceForTheme } from "../src/lib/canvas/canvas-appearance";
 import { applyCanvasLiveViewport, CANVAS_GRAPHICS_VIEWPORT_PREVIEW_EVENT, CANVAS_VIEWPORT_PREVIEW_EVENT } from "../src/lib/canvas/canvas-live-viewport";
 import type { CanvasBackgroundMode } from "../src/lib/canvas-theme";
@@ -20,9 +20,9 @@ const viewports: ViewportTransform[] = [
 
 function renderGrid(mode: CanvasBackgroundMode, viewport: ViewportTransform, theme: "light" | "dark" = "dark") {
     const markup = renderToStaticMarkup(
-        <InfiniteCanvas containerRef={createRef<HTMLDivElement>()} viewport={viewport} onViewportChange={() => {}} backgroundMode={mode} appearance={canvasAppearanceForTheme(theme)}>
+        <CanvasViewport containerRef={createRef<HTMLDivElement>()} viewport={viewport} onViewportChange={() => {}} backgroundMode={mode} appearance={canvasAppearanceForTheme(theme)}>
             <div data-test-node />
-        </InfiniteCanvas>,
+        </CanvasViewport>,
     );
     return markup.match(/<div data-canvas-grid-layer[^>]*>/)?.[0] ?? null;
 }
@@ -70,8 +70,9 @@ describe("canvas screen-space background", () => {
         for (const viewport of viewports) {
             applyCanvasLiveViewport(container as unknown as HTMLDivElement, viewport, false);
             expect(world.style.transform).toBe(`translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.k / 0.5})`);
-            expect(properties.get("--canvas-live-scale")).toBe(String(viewport.k));
-            expect(properties.get("--canvas-live-inverse-scale")).toBe(String(1 / viewport.k));
+            // 交互期不改继承变量，避免整棵节点子树在每一帧强制重算样式。
+            expect(properties.has("--canvas-live-scale")).toBe(false);
+            expect(properties.has("--canvas-live-inverse-scale")).toBe(false);
             expect(gridWrites).toEqual([]);
         }
         expect(graphics).toEqual(viewports);
@@ -81,6 +82,8 @@ describe("canvas screen-space background", () => {
 
         container.dataset.canvasViewportInteracting = "false";
         applyCanvasLiveViewport(container as unknown as HTMLDivElement, viewports[0]);
+        expect(properties.get("--canvas-live-scale")).toBe("1");
+        expect(properties.get("--canvas-live-inverse-scale")).toBe("1");
         expect(world.style.willChange).toBe("");
         expect(previews).toEqual([viewports[0]]);
         expect(scrolls).toBe(1);

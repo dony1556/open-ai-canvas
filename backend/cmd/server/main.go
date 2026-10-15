@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"infinite-canvas/backend/internal/database"
-	"infinite-canvas/backend/internal/handler"
-	"infinite-canvas/backend/internal/logging"
-	"infinite-canvas/backend/internal/repository"
-	"infinite-canvas/backend/internal/service"
-	"infinite-canvas/backend/internal/updaterclient"
+	"yingce/backend/internal/database"
+	"yingce/backend/internal/handler"
+	"yingce/backend/internal/logging"
+	"yingce/backend/internal/repository"
+	"yingce/backend/internal/service"
+	"yingce/backend/internal/updaterclient"
 
 	"github.com/gin-gonic/gin"
 )
@@ -101,6 +101,9 @@ func run(ctx context.Context) error {
 	if err := svc.EnsureBuiltinTools(); err != nil {
 		return err
 	}
+	if err := ensureBuiltinWorkbenchCatalog(svc); err != nil {
+		return err
+	}
 	if summary, err := svc.MigrateLegacyStorage(); err != nil {
 		slog.Warn("storage migration skipped after error", "error", err)
 	} else if summary.Backup != "" {
@@ -171,6 +174,10 @@ func run(ctx context.Context) error {
 	}
 	slog.Info("backend stopped gracefully")
 	return nil
+}
+
+func ensureBuiltinWorkbenchCatalog(svc *service.Service) error {
+	return svc.EnsureBuiltinWorkbenchCatalog()
 }
 
 func redactCanvasSharePath(path string) string {

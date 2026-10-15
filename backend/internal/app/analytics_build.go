@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 func normalizeAnalyticsFilter(query AnalyticsQuery) repository.AnalyticsFilter {
@@ -117,6 +117,9 @@ func buildAnalyticsTrend(filter repository.AnalyticsFilter, tasks []model.Task, 
 		key := log.CreatedAt.UTC().Format("2006-01-02")
 		if point := points[key]; point != nil {
 			point.Requests++
+			if log.BillingAmount > 0 {
+				point.ConsumedMicrocredits += log.BillingAmount
+			}
 			requestTotals[key]++
 			if log.Status == model.ApiCallStatusSucceeded {
 				requestSuccess[key]++

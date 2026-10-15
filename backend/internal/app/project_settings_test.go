@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -24,7 +24,7 @@ func newProjectSettingsTestService(t *testing.T) (*Service, *gorm.DB) {
 		&model.Shot{}, &model.ShotArtifact{}, &model.VoiceProfile{},
 		&model.Task{}, &model.TaskLog{}, &model.Result{},
 		&model.CreationRun{}, &model.CreationSubmission{},
-		&model.CloudAgentResourceLease{}, &model.Tool{},
+		&model.CloudAgentResourceLease{}, &model.Tool{}, &model.WorkbenchTool{},
 		&model.Announcement{}, &model.AnnouncementImageDraft{},
 	); err != nil {
 		t.Fatal(err)

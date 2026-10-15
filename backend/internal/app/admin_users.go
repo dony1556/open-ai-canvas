@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 func (s *Service) RequireAdmin(user *model.User) error {
@@ -92,7 +92,7 @@ func (s *Service) AdminReferences(actor *model.User) (*AdminReferenceData, error
 			if item.Enabled {
 				models = append(models, item.ModelKey)
 			}
-			displayNames = append(displayNames, firstNonEmpty(strings.TrimSpace(item.DisplayName), item.ModelKey))
+			displayNames = append(displayNames, strings.TrimSpace(item.DisplayName))
 		}
 		result.Channels = append(result.Channels, AdminChannelReference{ID: channel.ID, Name: channel.Name, Enabled: channel.Enabled, Models: uniqueNonEmpty(models), ModelDisplayNames: uniqueNonEmpty(displayNames)})
 	}

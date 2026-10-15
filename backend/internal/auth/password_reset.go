@@ -3,13 +3,13 @@ package auth
 import (
 	"crypto/hmac"
 	"errors"
-	"infinite-canvas/backend/internal/kernel"
 	"log"
 	"strings"
 	"time"
+	"yingce/backend/internal/kernel"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/gorm"
 )
@@ -80,7 +80,6 @@ func (s *Service) SendPasswordResetEmailCode(rawEmail string) error {
 		if cleanupErr := s.repo.DeleteEmailVerificationCode(record.ID); cleanupErr != nil {
 			log.Printf("password reset email cleanup failed: recipient=%s error=%v", maskedEmail(email), cleanupErr)
 		}
-		log.Printf("password reset email delivery failed: recipient=%s error=%v", maskedEmail(email), err)
 		return nil
 	}
 	if cleanupErr := s.repo.DeleteExpiredEmailVerificationCodes(now.Add(-24 * time.Hour)); cleanupErr != nil {

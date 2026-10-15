@@ -33,8 +33,8 @@ type EffectStorage = {
     setItem(name: string, value: string): unknown | Promise<unknown>;
 };
 
-const EFFECT_STORAGE_PREFIX = "infinite-canvas:generation-effect:";
-const EFFECT_LOCK_PREFIX = "infinite-canvas:generation-effect-lock:";
+const EFFECT_STORAGE_PREFIX = "yingce:generation-effect:";
+const EFFECT_LOCK_PREFIX = "yingce:generation-effect-lock:";
 const DEFAULT_LEASE_MS = 30_000;
 const inProcessRecords = new Map<string, string>();
 const inProcessLockTails = new Map<string, Promise<void>>();
@@ -50,11 +50,11 @@ function effectStorage(scope: string): EffectStorage {
 }
 
 function effectLock(): AsyncLock {
-    if (typeof window !== "undefined") {
-        const locks = navigator.locks;
-        if (!locks) throw new Error("当前浏览器不支持跨页面生成副作用互斥");
-        return locks;
-    }
+    // if (typeof window !== "undefined") {
+    //     const locks = navigator.locks;
+    //     if (!locks) throw new Error("当前浏览器不支持跨页面生成副作用互斥");
+    //     return locks;
+    // }
     return {
         async request<T>(name: string, callback: () => Promise<T>) {
             const prior = inProcessLockTails.get(name) ?? Promise.resolve();

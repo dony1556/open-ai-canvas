@@ -18,11 +18,11 @@ import (
 	"testing/iotest"
 	"time"
 
-	"infinite-canvas/backend/internal/assets"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/outbound/outboundtest"
-	"infinite-canvas/backend/internal/repository"
-	"infinite-canvas/backend/internal/storage"
+	"yingce/backend/internal/assets"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/outbound/outboundtest"
+	"yingce/backend/internal/repository"
+	"yingce/backend/internal/storage"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -471,6 +471,40 @@ func TestPrepareResourceDeliveryPrefersConfiguredCDN(t *testing.T) {
 	}
 	if delivery.Resource == nil || delivery.Resource.ID != resource.ID || delivery.Access == nil || delivery.Access.Delivery != assets.DeliveryCDN || delivery.Access.URL != "https://media.example.com/users/user-1/image/test%20image.png" {
 		t.Fatalf("PrepareResourceDelivery() = %#v", delivery)
+	}
+}
+
+func TestPrepareResourceDeliveryUsesPublicCDNForDownloadWhenOriginIsPrivate(t *testing.T) {
+	svc := newResourceTestService(t)
+	settingJSON, _ := json.Marshal(ossSettingValue{
+		Enabled: true, Provider: tencentCOSProvider, Endpoint: "http://storage.internal", CDNBaseURL: "https://media.example.com",
+		Bucket: "private-bucket-1250000000", AccessKeyID: "secret-id", AccessKeySecret: "secret-key",
+		Delivery: storage.DeliverySettings{CDNAuthMode: "public"},
+	})
+	if err := svc.repo.SaveSystemSetting(&model.SystemSetting{Key: ossSettingKey, ValueJSON: string(settingJSON)}); err != nil {
+		t.Fatal(err)
+	}
+	resource := model.Resource{
+		ID: "resource-public-cdn-download", UserID: "user-1", Kind: "image", Status: model.ResourceStatusReady,
+		Provider: tencentCOSProvider, Endpoint: "http://storage.internal", Bucket: "private-bucket-1250000000",
+		ObjectKey: "users/user-1/image/test image.png", MimeType: "image/png",
+	}
+	if err := svc.repo.CreateResource(&resource); err != nil {
+		t.Fatal(err)
+	}
+	delivery, err := svc.PrepareResourceDelivery("user-1", resource.ID, ResourceAccessOptions{Purpose: assets.PurposeDownload, DownloadName: "下载图片.png"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivery.Access == nil || delivery.Access.Delivery != assets.DeliveryCDN || delivery.Access.ExpiresAt != nil {
+		t.Fatalf("PrepareResourceDelivery() = %#v", delivery)
+	}
+	parsed, err := url.Parse(delivery.Access.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Host != "media.example.com" || parsed.Path != "/users/user-1/image/test image.png" || !strings.HasPrefix(parsed.Query().Get("response-content-disposition"), "attachment") {
+		t.Fatalf("download URL = %q", delivery.Access.URL)
 	}
 }
 

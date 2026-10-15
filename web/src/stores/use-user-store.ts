@@ -6,8 +6,13 @@ export type LocalUser = {
     id: string;
     username: string;
     email?: string;
+    phone?: string;
+    emailVerifiedAt?: string;
+    phoneVerifiedAt?: string;
     displayName: string;
     avatarUrl?: string;
+    avatarMode?: "custom" | "default" | "";
+    avatarPreset?: string;
     identityProvider?: string;
     identityId?: string;
     identityUsername?: string;
@@ -33,6 +38,9 @@ export type FeatureAvailability = {
     frontendModelsEnabled: boolean;
     pluginCenterEnabled: boolean;
     systemPluginsVisibleToUsers: boolean;
+    inspirationSourcesVisible: boolean;
+    imageWorkbenchEnabled: boolean;
+    videoWorkbenchEnabled: boolean;
     configured?: boolean;
     updatedBy?: string;
     updatedAt?: string;
@@ -47,6 +55,9 @@ export const defaultFeatureAvailability: FeatureAvailability = {
     frontendModelsEnabled: false,
     pluginCenterEnabled: true,
     systemPluginsVisibleToUsers: true,
+    inspirationSourcesVisible: true,
+    imageWorkbenchEnabled: false,
+    videoWorkbenchEnabled: false,
 };
 
 type UserStore = {

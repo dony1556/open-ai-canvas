@@ -1,8 +1,8 @@
 package app
 
 import (
-	"infinite-canvas/backend/internal/canvas/contract"
 	"strings"
+	"yingce/backend/internal/canvas/contract"
 )
 
 // cloudAgentGenerationSpec 将 Agent 参数和已解析素材转换为画布生成合同。
@@ -26,12 +26,19 @@ func cloudAgentGenerationSpec(a cloudAgentMediaArgs, refs map[string]any, resolv
 			options.DurationSeconds = &a.Duration
 		}
 		options.GenerateAudio = a.VideoGenerateAudio
+		options.Watermark = a.VideoWatermark
 		if a.Quality != "" {
 			options.Resolution = &a.Quality
 		}
 	} else if a.Mode == "image" {
 		count := 1
 		options.Count = &count
+		if a.ImageResolution != "" {
+			options.ImageResolution = &a.ImageResolution
+		}
+		if a.ImageParameters != "" {
+			options.ImageParameters = &a.ImageParameters
+		}
 		if a.Quality != "" {
 			options.Quality = &a.Quality
 		}

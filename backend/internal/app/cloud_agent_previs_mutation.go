@@ -10,8 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 const (
@@ -1086,7 +1086,9 @@ func cloudAgentPrevisApplyName(item map[string]any, value *string, label string)
 }
 
 func cloudAgentPrevisApplyCharacterBinding(item map[string]any, operation cloudAgentPrevisPatchOperation) error {
-	provided := operation.CharacterAssetID != nil || operation.CharacterVersionID != nil || operation.ReferenceNodeID != nil || operation.CharacterName != nil
+	// characterName is descriptive metadata for a real character-card binding;
+	// a name on an actor from an ordinary reference image must not trigger binding.
+	provided := operation.CharacterAssetID != nil || operation.CharacterVersionID != nil || operation.ReferenceNodeID != nil
 	if !provided {
 		return nil
 	}
@@ -1122,7 +1124,7 @@ func cloudAgentPrevisApplyCharacterBinding(item map[string]any, operation cloudA
 }
 
 func cloudAgentPrevisValidateCharacterBindingInCanvas(doc map[string]any, operation cloudAgentPrevisPatchOperation) error {
-	if operation.CharacterAssetID == nil && operation.CharacterVersionID == nil && operation.ReferenceNodeID == nil && operation.CharacterName == nil {
+	if operation.CharacterAssetID == nil && operation.CharacterVersionID == nil && operation.ReferenceNodeID == nil {
 		return nil
 	}
 	if operation.CharacterAssetID == nil || operation.CharacterVersionID == nil || operation.ReferenceNodeID == nil {
@@ -1945,15 +1947,20 @@ func applyCloudAgentPrevisMutation(repo *repository.Repository, userID, canvasID
 	if err = saveCloudAgentDocument(repo, plan.Canvas, plan.Document, policy); err != nil {
 		return nil, err
 	}
+	afterCanvasHash := cloudAgentCanvasHash(plan.Document)
+	afterSceneHash := plan.ResultSnapshotHash
+	if scene, ok := findPrevisScene(creationMaps(plan.Document["previsScenes"]), plan.SceneID); ok {
+		afterSceneHash = creationHash(scene)
+	}
 	if len(recorder) > 0 && recorder[0] != nil {
 		preview := plan.Preview
-		if err := recorder[0](repo, cloudAgentMutationInput{UserID: userID, CanvasID: canvasID, StepID: call.ID, Operation: plan.Operation, BeforeSnapshotHash: plan.BeforeSnapshotHash, AfterSnapshotHash: plan.AfterSnapshotHash, BeforeJSON: plan.BeforeJSON, Preview: &preview}); err != nil {
+		if err := recorder[0](repo, cloudAgentMutationInput{UserID: userID, CanvasID: canvasID, StepID: call.ID, Operation: plan.Operation, BeforeSnapshotHash: plan.BeforeSnapshotHash, AfterSnapshotHash: afterCanvasHash, BeforeJSON: plan.BeforeJSON, Preview: &preview}); err != nil {
 			return nil, err
 		}
 	}
-	resultSnapshotHash := plan.ResultSnapshotHash
+	resultSnapshotHash := afterSceneHash
 	if resultSnapshotHash == "" {
-		resultSnapshotHash = plan.AfterSnapshotHash
+		resultSnapshotHash = afterCanvasHash
 	}
-	return map[string]any{"canvasId": canvasID, "sceneId": plan.SceneID, "nodeId": plan.NodeID, "shotId": plan.ShotID, "snapshotHash": resultSnapshotHash, "canvasSnapshotHash": plan.AfterSnapshotHash, "committed": true, "summary": plan.Preview.Description}, nil
+	return map[string]any{"canvasId": canvasID, "sceneId": plan.SceneID, "nodeId": plan.NodeID, "shotId": plan.ShotID, "snapshotHash": resultSnapshotHash, "canvasSnapshotHash": afterCanvasHash, "committed": true, "summary": plan.Preview.Description}, nil
 }

@@ -4,15 +4,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
-	"infinite-canvas/backend/internal/canvas/capability"
-	"infinite-canvas/backend/internal/canvas/layout"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/canvas/capability"
+	"yingce/backend/internal/canvas/layout"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 // cloudAgentApprovalPreview is server-authored explanatory data. It never
@@ -68,7 +69,19 @@ func prepareCloudAgentCanvasMutation(repo *repository.Repository, userID, canvas
 	}
 	beforeHash := cloudAgentCanvasHash(doc)
 	if beforeHash != args.SnapshotHash {
-		return nil, &cloudAgentFieldArgumentError{error: &cloudAgentArgumentError{creationConflict("画布已变化，本次未写入；请重新读取并重新申请审批")}, Field: "snapshotHash", Issue: "stale_snapshot"}
+		// The tool call describes concrete node/connection operations. Rebase that
+		// operation list onto the current document instead of rejecting it because
+		// an unrelated browser save advanced the canvas revision.
+		latest, latestErr := repo.CanvasProjectForUser(userID, canvasID)
+		if latestErr != nil {
+			return nil, latestErr
+		}
+		canvas = latest
+		doc, err = creationDocument(canvas.PayloadJSON)
+		if err != nil {
+			return nil, err
+		}
+		beforeHash = cloudAgentCanvasHash(doc)
 	}
 	items, err := applyCloudAgentCanvasPlan(doc, args.Ops)
 	if err != nil {
@@ -166,6 +179,11 @@ func applyCloudAgentCanvasPlan(doc map[string]any, ops []agentCanvasOp) ([]cloud
 				return nil, cloudAgentFieldError(fmt.Sprintf("ops[%d].toNodeId", opIndex), "invalid_value", "连线不能指向自身；请选择另一个目标节点")
 			}
 			if err := validateCloudAgentConnectionWithHandles(nodes, op.FromNodeID, op.ToNodeID, op.FromHandleID, op.ToHandleID, edges); err != nil {
+				// 保留端点校验指出的具体字段，让模型只修正错误 handle，而不是放弃镜头绑定。
+				var fieldErr *cloudAgentFieldArgumentError
+				if errors.As(err, &fieldErr) {
+					return nil, cloudAgentFieldError(fmt.Sprintf("ops[%d].%s", opIndex, fieldErr.Field), fieldErr.Issue, cloudAgentSafeToolError(err))
+				}
 				return nil, cloudAgentFieldError(fmt.Sprintf("ops[%d]", opIndex), "invalid_connection", cloudAgentSafeToolError(err))
 			}
 			for _, edge := range edges {

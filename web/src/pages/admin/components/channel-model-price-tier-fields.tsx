@@ -7,6 +7,7 @@ import type { ChannelModelFormValues as FormValues } from "./channel-model-edito
 import { normalizeUpstreamModelKey } from "./channel-model-price-tier-form";
 import { CreditCostFields } from "./credit-cost-fields";
 import { Select } from "@/components/ui/base/select";
+import { ImageParameterInput } from "@/components/image-parameter-fields";
 
 export function PriceTierFields({
     index,
@@ -38,6 +39,7 @@ export function PriceTierFields({
     // 静默改变实际发往供应商的模型，必须显式提示并允许一键恢复“跟随模型默认”。
     const staleTierUpstream = matchMode === "default" && tierUpstream && modelUpstream && tierUpstream !== modelUpstream ? tierUpstream : "";
     const video = capabilityConfig?.video;
+    const image = capabilityConfig?.image;
     const resolutionOptions = Array.from(new Set([...(video?.resolutions || []), ...(protocol === "autodl-comfyui" ? video?.fixedScreenSpec?.resolutions || [] : [])]));
     const tokenEnabled = modelProtocolSupportsTokenBilling(capability, protocol);
     const isVideo = capability === "video";
@@ -57,7 +59,7 @@ export function PriceTierFields({
                     <span className="admin-price-tier-card-index">{String(ordinal).padStart(2, "0")}</span>
                     <div className="admin-price-tier-card-heading-copy">
                         <div className="admin-price-tier-card-title">{matchMode === "default" ? "默认价格" : `规格价格 ${ordinal}`}</div>
-                        <div className="admin-price-tier-card-summary">{matchMode === "default" ? "所有请求使用同一价格" : isVideo ? "按生成方式与分辨率匹配" : "按生成方式、质量或尺寸匹配"}</div>
+                        <div className="admin-price-tier-card-summary">{matchMode === "default" ? "所有请求使用同一价格" : isVideo ? "按生成方式与分辨率匹配" : "按生成方式、画质、分辨率或尺寸匹配"}</div>
                     </div>
                 </div>
                 <div className="admin-price-tier-card-actions">
@@ -115,19 +117,26 @@ export function PriceTierFields({
                                         <Select options={[{ label: "任意分辨率", value: "*" }, ...resolutionOptions.map((value) => ({ label: value.toUpperCase(), value }))]} />
                                     </Form.Item>
                                 ) : null}
-                                {isImage ? (
-                                    <Form.Item className="mb-0" name={[index, "quality"]} label="质量/分辨率" rules={[{ required: true, message: "请选择质量或分辨率" }]}>
-                                        <Select
-                                            options={[
-                                                { label: "任意质量", value: "*" },
-                                                { label: "1K", value: "1k" },
-                                                { label: "2K", value: "2k" },
-                                                { label: "4K", value: "4k" },
-                                            ]}
-                                        />
+                                {isImage && image?.parameters
+                                    ? image.parameters
+                                          .filter((field) => field.enabled !== false && field.pricing)
+                                          .map((field) => (
+                                              <Form.Item key={field.name} className="mb-0" name={[index, "imageSelector", field.name]} label={field.label}>
+                                                  <ImagePriceParameterInput field={field} />
+                                              </Form.Item>
+                                          ))
+                                    : null}
+                                {isImage && !image?.parameters && image?.resolution?.supported ? (
+                                    <Form.Item className="mb-0" name={[index, "imageResolution"]} label="上游分辨率" rules={[{ required: true, message: "请选择上游分辨率" }]}>
+                                        <Select options={[{ label: "任意分辨率", value: "*" }, ...image.resolution.values.map((value) => ({ label: value.toUpperCase(), value }))]} />
                                     </Form.Item>
                                 ) : null}
-                                {isImage ? (
+                                {isImage && !image?.parameters && image?.quality.supported ? (
+                                    <Form.Item className="mb-0" name={[index, "quality"]} label="画质" rules={[{ required: true, message: "请选择画质" }]}>
+                                        <Select options={[{ label: "任意画质", value: "*" }, ...image.quality.values.map((value) => ({ label: value.toUpperCase(), value }))]} />
+                                    </Form.Item>
+                                ) : null}
+                                {isImage && !image?.parameters && image?.size.parameter !== "none" ? (
                                     <Form.Item className="mb-0" name={[index, "size"]} label="画幅/尺寸">
                                         <Input placeholder="任意，或 1:1、16:9、1024x1024" />
                                     </Form.Item>
@@ -212,6 +221,24 @@ export function PriceTierFields({
             </div>
         </article>
     );
+}
+
+function ImagePriceParameterInput({ field, value, onChange }: { field: import("@/lib/image-parameters").ImageParameter; value?: string; onChange?: (value?: string) => void }) {
+    const typed = value === undefined || value === "" || value === "*" ? undefined : field.type === "boolean" ? value === "true" : field.type === "number" || field.type === "integer" ? Number(value) : value;
+    if (field.type === "boolean")
+        return (
+            <Select
+                allowClear
+                placeholder="任意"
+                value={value}
+                options={[
+                    { label: "开启", value: "true" },
+                    { label: "关闭", value: "false" },
+                ]}
+                onChange={onChange}
+            />
+        );
+    return <ImageParameterInput field={field} value={typed} onChange={(next) => onChange?.(next === undefined ? undefined : String(next))} />;
 }
 
 function operationOptions(capability: EditableCapability | undefined) {
