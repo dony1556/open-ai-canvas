@@ -1,3 +1,4 @@
+import { createClientUUID } from "@/lib/client-id";
 import { normalizeAudioFormatForConfig, normalizeAudioVoiceForConfig } from "@/lib/audio-generation";
 import { imageParameterRequest } from "@/lib/image-parameters";
 import { getMediaBlob } from "@/services/file-storage";
@@ -20,6 +21,7 @@ export { logicalModelIDForConfig };
 export type BackendGenerationMode = "text" | "image" | "video" | "audio";
 
 export type BackendGenerationResult = {
+    projectAssetImageStatus?: "bound" | "stale";
     mode?: BackendGenerationMode;
     images?: Array<{ dataUrl: string; storageKey?: string; width?: number; height?: number; bytes?: number; mimeType?: string }>;
     video?: { dataUrl: string; storageKey?: string; width?: number; height?: number; durationMs?: number; bytes?: number; mimeType?: string };
@@ -61,7 +63,7 @@ export type GenerationTaskDependencies = {
 const defaultDependencies: GenerationTaskDependencies = {
     createTask: createGenerationTask,
     waitTask: waitForGenerationTask,
-    createId: () => crypto.randomUUID(),
+    createId: () => createClientUUID(),
 };
 
 type PreparedGenerationReferences = {

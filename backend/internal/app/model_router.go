@@ -338,7 +338,9 @@ func skuSelectorForIntent(intent ModelRequestIntent) map[string]string {
 		// 价格档按实际参考素材归类。供应商执行仍可使用 reference_to_video、extend
 		// 等细分操作；计价时视频参考优先归为视频生视频，其余图片参考无论数量
 		// 都归为图生视频。
-		if intent.Inputs["video"] > 0 {
+		if selector["operation"] == VideoProcessingOperationEnhance {
+			// 画质增强等处理任务保留自身 operation，价格档可单独按 enhance 定价。
+		} else if intent.Inputs["video"] > 0 {
 			selector["operation"] = "video_to_video"
 		} else if intent.Inputs["image"] > 0 {
 			selector["operation"] = "image_to_video"
@@ -354,6 +356,9 @@ func skuSelectorForIntent(intent ModelRequestIntent) map[string]string {
 		}
 		if audio := normalizedScalar(intent.Options["videoGenerateAudio"]); audio == "true" || audio == "false" {
 			selector["videoGenerateAudio"] = audio
+		}
+		if band := normalizedScalar(intent.Options["fpsBand"]); band == "le30" || band == "le60" || band == "le120" {
+			selector["fpsBand"] = band
 		}
 	case "image":
 		for name, value := range intent.Options {
@@ -392,6 +397,30 @@ func skuSelectorForIntent(intent ModelRequestIntent) map[string]string {
 	return selector
 }
 
+// Seedream 5.0 官方 1.5K 尺寸；这些尺寸在 2.36M 像素附近，会被通用阈值误判成 2K。
+var seedream15kSizes = map[string]struct{}{
+	"1536x1536": {}, "2048x1152": {}, "1152x2048": {}, "1792x1344": {},
+	"1344x1792": {}, "1872x1248": {}, "1248x1872": {}, "2352x1008": {},
+}
+
+// imageResolutionTierForSize 把精确像素尺寸归入价格档位；5M 上限覆盖含 1.5K 的 Seedream 2K 尺寸。
+func imageResolutionTierForSize(width, height int64) string {
+	if _, isSeedream15k := seedream15kSizes[fmt.Sprintf("%dx%d", width, height)]; isSeedream15k {
+		return "1.5k"
+	}
+	pixels := width * height
+	switch {
+	case pixels <= 2_000_000:
+		return "1k"
+	case pixels <= 5_000_000:
+		return "2k"
+	case pixels <= 8_294_400:
+		return "4k"
+	default:
+		return ""
+	}
+}
+
 func normalizeImagePriceQuality(rawQuality string, rawSize string) string {
 	quality := strings.ToLower(strings.TrimSpace(rawQuality))
 	if quality != "" && quality != "auto" && quality != "any" {
@@ -406,17 +435,7 @@ func normalizeImagePriceQuality(rawQuality string, rawSize string) string {
 	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || width > (1<<32)/height {
 		return ""
 	}
-	pixels := width * height
-	switch {
-	case pixels <= 2_000_000:
-		return "1k"
-	case pixels <= 4_300_000:
-		return "2k"
-	case pixels <= 8_294_400:
-		return "4k"
-	default:
-		return ""
-	}
+	return imageResolutionTierForSize(width, height)
 }
 
 func imageResolutionFromSize(rawSize string) string {
@@ -429,22 +448,12 @@ func imageResolutionFromSize(rawSize string) string {
 	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || width > (1<<32)/height {
 		return ""
 	}
-	pixels := width * height
-	switch {
-	case pixels <= 2_000_000:
-		return "1k"
-	case pixels <= 4_300_000:
-		return "2k"
-	case pixels <= 8_294_400:
-		return "4k"
-	default:
-		return ""
-	}
+	return imageResolutionTierForSize(width, height)
 }
 
 func isImageResolutionTier(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1k", "2k", "4k":
+	case "1k", "1.5k", "2k", "4k":
 		return true
 	default:
 		return false
@@ -476,6 +485,10 @@ func matchSKUSelector(tier map[string]string, requested map[string]string) (bool
 			continue
 		}
 		if requested[key] != expected {
+			// 1.5K 请求在只配置了 1K / 2K 价格档时按相邻档命中，保证旧定价继续可用。
+			if (key == "quality" || key == "resolution" || key == "imageResolution") && strings.ToLower(strings.TrimSpace(requested[key])) == "1.5k" && (expected == "2k" || expected == "1k") {
+				continue
+			}
 			return false, 0
 		}
 		score++

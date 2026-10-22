@@ -90,7 +90,8 @@ type ImageResolutionConfig struct {
 }
 
 type ParameterSupport struct {
-	Supported bool `json:"supported"`
+	Supported bool   `json:"supported"`
+	Default   string `json:"default,omitempty"`
 }
 
 type VideoCapabilityConfig struct {
@@ -106,6 +107,28 @@ type VideoCapabilityConfig struct {
 	Watermark         VideoBooleanConfig     `json:"watermark"`
 	Operations        []string               `json:"operations"`
 	DefaultOperation  string                 `json:"defaultOperation"`
+	// Processing 只用于 kind=processing 的视频处理 provider（如画质增强），
+	// 生成类模型保持 nil。
+	Processing *VideoProcessingConfig `json:"processing,omitempty"`
+}
+
+const (
+	VideoProcessingFPSKeepSource = "keep_source"
+	VideoProcessingFPSUserSelect = "user_select"
+	// 轮询上限固定 1 小时，按大模型画质增强 RTF≈20 估算，源视频默认不超过 180 秒。
+	DefaultVideoProcessingMaxSourceSeconds = 180
+	// VideoProcessingOperationEnhance 是画质增强任务的 operation，前后端与价格档共用。
+	VideoProcessingOperationEnhance = "enhance"
+	// VolcengineMediaKitEnhanceVideoProtocol 是官方插件 volcengine-mediakit 的画质增强 provider。
+	VolcengineMediaKitEnhanceVideoProtocol = "volcengine-mediakit-enhance-video"
+)
+
+// VideoProcessingConfig 是视频处理工具的后台配置：帧率策略决定用户是否选择帧率，
+// 价格档通过 vquality + fpsBand 选择，按秒计费时按源时长预扣、按实际输出时长结算。
+type VideoProcessingConfig struct {
+	FPSPolicy        string `json:"fpsPolicy"`
+	FPSOptions       []int  `json:"fpsOptions,omitempty"`
+	MaxSourceSeconds int    `json:"maxSourceSeconds,omitempty"`
 }
 
 type VideoScreenSpecConfig struct {
@@ -297,6 +320,8 @@ func legacyImageResolutionTiers(protocol string) map[string]bool {
 		return map[string]bool{"1k": true, "2k": true}
 	case "agnes-image":
 		return map[string]bool{"1k": true, "2k": true, "4k": true}
+	case "km-kemei-seedream":
+		return map[string]bool{"1k": true, "1.5k": true, "2k": true}
 	default:
 		return nil
 	}
@@ -308,7 +333,7 @@ func normalizeLegacyImageResolutionRequest(protocol string, capability *ModelCap
 	if capability == nil || capability.Image == nil || !capability.Image.Resolution.Supported || capability.Image.Quality.Supported {
 		return ""
 	}
-	imageResolutionProtocol := strings.TrimSpace(protocol) == string(model.ChannelInterfaceGrokImage) || strings.TrimSpace(protocol) == "agnes-image"
+	imageResolutionProtocol := strings.TrimSpace(protocol) == string(model.ChannelInterfaceGrokImage) || strings.TrimSpace(protocol) == "agnes-image" || strings.Contains(strings.TrimSpace(protocol), "seedream")
 	if !imageResolutionProtocol {
 		return ""
 	}
@@ -448,6 +473,11 @@ func CapabilitySpecFromModelCapabilityConfig(config *ModelCapabilityConfig, capa
 		}
 		if len(video.Resolutions) > 0 {
 			spec.Options["vquality"] = anyValues(video.Resolutions)
+		}
+		if video.Processing != nil {
+			// 处理类模型的 videoSeconds 是服务端测得的源时长，fpsBand 只用于价格档选择。
+			spec.Options["videoSeconds"] = numericRange(1, float64(videoProcessingMaxSourceSeconds(video.Processing)), 1)
+			spec.Options["fpsBand"] = anyValues(videoProcessingFPSBands)
 		}
 		if video.GenerateAudio.Supported {
 			spec.Options["videoGenerateAudio"] = boolValues(true)

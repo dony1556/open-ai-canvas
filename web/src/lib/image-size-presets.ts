@@ -5,7 +5,11 @@ export const IMAGE_RESOLUTIONS: ImageResolutionTier[] = ["1k", "2k", "4k"];
 // 1.5K 只在模型明确配置此档位时出现，既有模型的档位保持原有顺序。
 export function imageResolutionTiers(profile: ImageCapabilityConfig): ImageResolutionTier[] {
     if (profile.parameters) return profile.resolution.supported ? profile.resolution.values : [];
-    return profile.size.presets?.some((preset) => preset.tier === "1.5k") || profile.quality.values.includes("1.5k") ? ["1k", "1.5k", "2k", "4k"] : IMAGE_RESOLUTIONS;
+    const declares15k = Boolean(profile.size.presets?.some((preset) => preset.tier === "1.5k") || profile.quality.values.includes("1.5k"));
+    if (!declares15k) return IMAGE_RESOLUTIONS;
+    // Seedream 5.0 最高 2K：声明了 1.5K 且没有 4K 档位时只提供 1K / 1.5K / 2K。
+    const declares4k = Boolean(profile.size.presets?.some((preset) => preset.tier === "4k") || profile.quality.values.includes("4k") || profile.resolution.values.includes("4k"));
+    return declares4k ? ["1k", "1.5k", "2k", "4k"] : ["1k", "1.5k", "2k"];
 }
 export const IMAGE_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4", "21:9"];
 // Administrator's initial selection; plugin constraints still bound these choices.
@@ -85,7 +89,7 @@ export function imageResolutionUsesQuality(profile: ImageCapabilityConfig) {
 }
 
 export function imageTierAvailable(profile: ImageCapabilityConfig, tier: ImageResolutionTier) {
-    if (profile.parameters) return profile.resolution.supported ? profile.resolution.values.includes(tier) : Boolean(profile.size.presets?.some((preset) => preset.tier === tier));
+    if (profile.parameters) return profile.resolution.supported ? profile.resolution.values.includes(tier) : (profile.size.parameter === "size" && profile.size.allowCustom) || Boolean(profile.size.presets?.some((preset) => preset.tier === tier));
     // 质量参数能映射档位时按上游质量裁剪；管理员尺寸预设存在时再取交集，避免默认 low/medium/high 把未启用的 1K 显示出来。
     if (profile.size.parameter !== "aspect_ratio") return profile.size.parameter !== "none";
     const configuredTiers = new Set(profile.size.presets?.map((preset) => preset.tier));

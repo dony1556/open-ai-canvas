@@ -1,3 +1,4 @@
+import { createClientUUID } from "@/lib/client-id";
 import { App, Button, Input, Skeleton } from "antd";
 import { Check, ChevronLeft, ChevronRight, CircleAlert, Coins, CreditCard, History, RefreshCw, TicketCheck, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -6,6 +7,7 @@ import { useLocation, useNavigate } from "react-router";
 import { PaymentCheckoutCode } from "@/components/payment-checkout-code";
 import { AppModal } from "@/components/ui/product/app-modal";
 import { formatCredits } from "@/constant/credits";
+import { generationErrorMessage } from "@/lib/generation-error";
 import { closePaymentOrder, createPaymentOrder, getPaymentOrder, listPaymentProviders, listTopupProducts, queryPaymentOrder, refreshPaymentCheckout, type PaymentOrder, type PaymentProvider, type TopupProduct } from "@/services/api/payments";
 import { getWallet, redeemCredits, type CreditLedgerEntry, type WalletSummary } from "@/services/api/wallet";
 import { cn } from "@/lib/utils";
@@ -192,7 +194,7 @@ export function WorkspaceWalletModal({ open, onClose, pendingPaymentOrderId, pay
         }
         setPaymentCreating(true);
         try {
-            if (!idempotencyKey.current) idempotencyKey.current = crypto.randomUUID();
+            if (!idempotencyKey.current) idempotencyKey.current = createClientUUID();
             const result = await createPaymentOrder({ productId: selectedProduct.id, providerId: selectedProvider.id, idempotencyKey: idempotencyKey.current });
             idempotencyKey.current = "";
             setPaymentOrder(result.order);
@@ -503,13 +505,14 @@ export function WorkspaceWalletModal({ open, onClose, pendingPaymentOrderId, pay
 
 function WalletLedgerRow({ entry }: { entry: CreditLedgerEntry }) {
     const positive = entry.amountMicrocredits > 0;
-    const title = entry.type === "consume" ? "模型调用" : entry.type === "refund" ? "消费退款" : entry.type === "payment_topup" ? "在线充值" : entry.type === "redeem" ? "兑换码充值" : entry.note || "积分调整";
+    const note = entry.note ? generationErrorMessage(entry.note) : "";
+    const title = entry.type === "consume" ? "模型调用" : entry.type === "refund" ? "消费退款" : entry.type === "payment_topup" ? "在线充值" : entry.type === "redeem" ? "兑换码充值" : note || "积分调整";
     return (
         <article className="workspace-wallet-ledger-row">
             <span className={cn("workspace-wallet-ledger-icon", positive ? "is-income" : "is-consume")}>{positive ? <Coins /> : <CreditCard />}</span>
             <div>
                 <strong>{title}</strong>
-                <span>{[entry.scene, entry.model, entry.note].filter(Boolean).join(" · ") || "积分账户变动"}</span>
+                <span>{[entry.scene, entry.model, note].filter(Boolean).join(" · ") || "积分账户变动"}</span>
             </div>
             <time>{new Date(entry.createdAt).toLocaleString("zh-CN", { hour12: false })}</time>
             <b className={positive ? "is-income" : "is-consume"}>
