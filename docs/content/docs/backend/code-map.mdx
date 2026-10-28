@@ -1,0 +1,257 @@
+---
+title: 代码功能地图
+description: 从产品功能快速定位主要代码入口
+---
+
+# 代码功能地图
+
+## 短剧自动制作
+
+- 纯逻辑：`backend/internal/production/`（作品圣经、分集与剧本提示词 `prompts.go`，模型输出解析 `parse.go`，分镜规则与时长 `storyboard.go` / `timing.go`，按视频模型上限切剧情段 `SegmentShotsForVideo`，段提示词素材稿 `segment_prompt.go` 与撰写要求 `segment_writer.go`，参考图方案 `assets.go`，用户分镜表直接导入 `storyboard_import.go`，原文台词逐句核对 `dialogue_check.go`）。
+- 调度循环：`backend/internal/app/drama_orchestrator.go`（同步任务结果 → 推导工作 → 按优先级派发，租约保证单项目单循环；成片时间线由各段视频拼接）；剧情段视频请求的组装、提交、回写与最后一帧抽取在 `drama_segment_video.go`（`prepareDramaSegment` 同时供预览与提交使用）。
+- 服务与用户操作：`app/drama_service.go`（创建、摘要、单集详情与剧情段视图）、`drama_actions.go`（审阅、镜头编辑、段提示词与段视频、设定重做、放行）、`drama_editing.go`（逐集追加、原文与素材类型修改、插入 / 删除镜头、上传并锁定参考图、台词核对）、`drama_models.go`（模型目录、视频能力 `dramaVideoProfile`、报价预估）；类型在 `drama_types.go`。
+- 持久化：`model/models_drama.go`、`repository/repository_drama.go`（调度与用户写入均为列级条件更新）；迁移 v61–v67、v71、v73 在 `database/migrations.go`。HTTP：`handler/drama_routes.go`。
+- 渲染：`app/timeline_render_plan.go` / `task_render.go` 用 ffmpeg 合成，保留段视频自带的声音。
+- 前端：`web/src/services/api/drama.ts`；`pages/projects/index.tsx`（作品列表）、`create.tsx`（上传与预估）、`detail.tsx`（制作台）。制作台子组件在 `pages/projects/studio/`：`storyboard.tsx`（剧情段卡片）、`segment-dialog.tsx`（剧情段弹窗：段视频、生成依据、镜头脚本与完整视频提示词）、`segment-parts.tsx`（状态、视频与生成依据共用组件）、`panels.tsx`（设定、待处理、制作设置）、`final-view.tsx`、`script-view.tsx`、`job-detail.tsx`；样式 `drama.css`。模型选择复用通用 `ModelPicker`（`drama-model-picker.tsx`、`lib/drama/model-choice.ts`）。
+- 回归：`internal/production/production_test.go`、`app/drama_orchestrator_test.go`、`app/drama_storyboard_test.go`、`app/drama_assets_test.go`、`web/src/lib/drama/*.test.ts`。
+
+## 画布实时会话
+
+- 传输入口：`backend/internal/handler/canvas_realtime.go` 校验登录与 Origin、管理 WebSocket；`app/canvas_realtime.go` 校验画布归属，`internal/canvas/realtime.go` 负责临时 Presence、房间隔离与 Redis 分发，`realtime_devices.go` 管理跨实例统一窗口编号及临时租期。
+- 提交通知：`repository/canvas_change_notifications.go` 与 `repository.go` 在外层事务提交后合并通知，回滚丢弃；operations、历史保存、租约、Agent 任务创建及任务结果回写沿用该边界。
+- 前端连接：`web/src/services/canvas-realtime-client.ts` 管理合并发送和重连，`canvas-realtime.ts` 按账号与画布共享窗口内连接；`pages/canvas/use-canvas-project-lifecycle.ts` 联动状态校验和独立租约维护。
+- 光标与拖拽：`components/canvas/canvas-collaboration-layer.tsx` 管理设备列表和多人事件采集，单窗口停止采集；`canvas-presence-renderer.ts` 负责按帧复用 DOM 投影远端图形，高频坐标不经过 React。`nginx.conf`、`web/vite.config.ts` 转发 WebSocket Upgrade。
+
+## 用户登录日志
+
+- 持久化：`backend/internal/model/models_login_log.go`、`repository/login_logs.go`；会话与日志原子提交在 `repository/account.go`，schema v53 在 `database/migrations.go`。
+- 认证采集：`backend/internal/auth/login_logs.go`、`auth.go`、`verification.go`、`linuxdo.go`；HTTP 上下文和提前拒绝采集在 `handler/admin_login_log_routes.go`。
+- 管理员查询：`app/admin_login_logs.go` → `service/aliases_login_logs.go` → `handler/admin_login_log_routes.go`。
+- 前端：`web/src/services/api/login-logs.ts`、`pages/admin/login-logs/`；菜单和懒加载接入 `admin-shell.tsx`、`router.tsx`。
+- 回归：auth/handler/database 的 `login_logs*_test.go`，前端 `web/test/login-log-device.test.ts`。
+
+## 可美 KM Seedream
+
+- 声明式请求、响应与参数合同：`plugin-packages/km-kemei-seedream/manifest.json`、`docs/interface.md`；分发包：`plugin-packages/km-kemei-seedream.yingce-plugin`。
+- 后端默认能力与预设：`backend/internal/app/model_capability_defaults.go`、`model_capability_kemei.go`；档位校验：`model_capability_validate.go`。
+- 前端预设与选择：`web/src/lib/kemei-image-presets.ts`、`image-resolution-tiers.ts`、`image-size-presets.ts`、`model-capabilities.ts`；界面入口：`web/src/components/image-size-picker.tsx`、`image-size-presets-editor.tsx`。
+- 协议回归：`backend/internal/protocol/km_kemei_seedream_test.go`；前后端能力与尺寸测试位于对应测试目录。
+
+## 自定义更新公告
+
+- 后台编辑：`web/src/pages/admin/settings/components/update-announcement-editor.tsx`；版本、排序与草稿校验：`web/src/lib/update-announcement.ts`。
+- 统一入口与弹窗：`web/src/components/layout/app-changelog-modal.tsx`、`app-changelog-dialog.tsx`；图文视频展示：`update-announcement-content.tsx`。
+- 服务端持久化、校验、公开投影及媒体访问：`backend/internal/app/appearance_updates.go` 与 `appearance.go`；HTTP 边界：`backend/internal/handler/appearance.go`。
+
+## 画布 Agent 配置与 Live2D
+
+- 后台入口：`web/src/pages/admin/settings/appearance-settings-page.tsx` 与 `components/canvas-appearance-editor.tsx`。
+- 公共配置及文案：`web/src/stores/use-appearance-store.ts`、`web/src/lib/canvas/agent-appearance.ts`。
+- 画布形象：`web/src/components/canvas/live2d-avatar.tsx`、`canvas-cloud-agent-panel.tsx`；受限资源加载：`web/src/services/live2d-loader.ts`。
+- 服务端：`backend/internal/app/appearance_canvas.go` 校验配置，`appearance_live2d.go` 验证 ZIP、导入及资源访问；`backend/internal/handler/appearance_live2d.go` 为 HTTP 边界。已有外观设置和资源引用链路负责持久化及删除保护。
+
+这是一张入口地图，不罗列所有文件。先找到功能所属层，再沿调用关系阅读。
+
+## 前端页面
+
+头像裁剪复用 `components/image-crop-dialog.tsx`，原画布裁剪入口保留同一组件合同；`services/profile-avatar.ts` 校验 1:1 区域、导出有界 PNG，`lib/default-user-avatars.ts` 定义系统头像目录，`UserAvatar` 统一渲染系统预设或个人图片。schema v52 增加系统头像选择。
+
+个人信息：`web/src/pages/settings/profile-pane.tsx` 协调头像、密码、邮箱和第三方重新核验，`profile-validation.ts` 提供密码、图片与过期校验，`services/api/profile.ts` 使用统一 `http` 调用。共享头像在 `components/layout/user-avatar.tsx`。后端 `handler/auth_profile.go` 接收鉴权和受限请求，`app/auth_profile.go` / `profile_avatar.go` 组合 auth 域，`auth/account.go` / `avatar.go` / `linuxdo.go` 校验身份与头像内容，`repository/account.go` / `user_avatar.go` 处理会话撤销、邮箱唯一性、验证码消费和头像的事务保存，schema v51 安装个人信息及重新核验字段。
+
+云端 Agent：`web/src/components/canvas/canvas-cloud-agent-panel.tsx` 协调对话、技能和审批，`canvas-cloud-agent-settings.tsx` 编辑偏好；`services/api/agent.ts` 消费持久化运行及 SSE。手工提示词与媒体草稿更新仍共用 `lib/canvas/canvas-node-prompt.ts`，不覆盖已提交输入或生成结果。
+
+多端接续沿用已有运行的 `conversationId`：后端 `app/cloud_agent_conversations.go`、`repository/cloud_agent_conversations.go` 提供按用户隔离的只读目录和分页轮次，并在任务预留事务内校验最新父轮；前端 `services/cloud-agent-history.ts`、`lib/canvas/cloud-agent-follow.ts` 和共享事件归约负责云端恢复、游标跟随与本机草稿保护。
+
+图片审批规格更新在 `canvas-agent-image-approval-settings.tsx` 累积同一次交互的多个参数变化，并移除扩展 JSON 中冲突的旧规格。
+
+### 云端 Agent 重构后的责任边界
+
+| 职责 | 入口与边界 |
+| --- | --- |
+| 运行创建与可恢复编排 | `backend/internal/app/cloud_agent.go` 负责权限、幂等和可信历史，`cloud_agent_runtime.go` / `cloud_agent_pi_coordinator.go` 负责编排；Pi 进程与回调桥在 `internal/agent/runtime/`、`internal/agent/yingceagent/`、`agent-runtime/pi/agent-runtime.mjs`，生产远程失败不回退为内嵌重放 |
+| 工具注册与执行绑定 | `internal/agent/tool/{policy,registry}.go` 是分类与可见性的单一来源；`app/cloud_agent_tool_registry.go` 和 `cloud_agent_tool_bindings.go` 将全部 29 个定义绑定到读、写、预览、媒体或视觉管线；未知/遗漏绑定在初始化与契约测试中拒绝，执行器不再维护第二套名称分派表 |
+| 参数结构与 schema | `internal/agent/tool/{read_args,schema}.go` 由 8 个读取参数类型生成 schema，实际解码使用同一类型；其余工具保留相邻契约。`app/cloud_agent_tools.go` 输出供应商 schema，golden 测试守工具顺序和字段语义 |
+| 画布事实与节点能力 | `internal/canvas/capability/` 注册能力，`app/cloud_agent_canvas_state.go` 提供分页/定向读取；`cloud_agent.go` 只给焦点节点有界摘要及一跳邻居。旧 CanvasIntelligence、平行 CanvasToolRegistry 与无执行器的标准工具代码已移除 |
+| 单一行为策略 | `internal/prompts/agent-system-policy.md` 为 v17 运行资源；`prompts/agent_policy.go` 只 embed 此文件，并派生媒体标识；`app/cloud_agent_policy.go` 编译能力、权限等事实。独立媒体策略文件已移除，`prompts/AGENTS.md` 仅是维护约定，不拼入模型输入 |
+| 个人经验与注入 | `internal/agent/memory/candidate.go` 保存带工具证据的候选；`app/cloud_agent_lessons.go` 只在成功收尾后提交待审，并按当前步骤召回最多 5 条、JSON 正文 6 KiB 的相关经验；`cloud_agent_memory_injection.go` 在模型任务入队时识别真实注入条目，`repository/agent_lesson.go` 持久化 |
+| 压缩提案与历史恢复 | `app/cloud_agent_memory_compact.go` 负责有界轮转批次和任务，`cloud_agent_memory_proposal*.go` 生成/展示提案并接收决定；`repository/agent_memory_proposal*.go` / `agent_memory_revision.go` 做归属与版本 CAS 事务，`handler/agent_memory_proposal.go` 接线。模型与 schema 58 见数据库专题 |
+| 用户设置与证据预览 | `web/src/pages/settings/agent-memory-pane.tsx` 管理记忆及来源证据，`agent-memory-proposals.tsx` 展示 before/after、批准拒绝和恢复；`services/api/agent-memories.ts` 是类型化调用面。管理员列表仍在 `pages/admin/components/agent-lessons-panel.tsx`，不能代批 |
+| 画布逐步撤销 | `app/cloud_agent_mutation.go` 生成有界快照及撤销凭据，`cloud_agent_canvas_events.go` 写 `canvas_updated.undo`，`cloud_agent_undo.go` 校验最新变更/哈希并幂等撤销；前端 `lib/canvas/agent-canvas-undo.ts` 与聊天卡片按凭据中的原运行和画布提交 |
+| 评测与架构守卫 | `internal/agent/architecture/` 守 Agent 依赖方向、协议map暴露及复杂度/尺寸存量基线；`backend/.golangci.yml` 接 Agent 域静态检查 |
+
+收费媒体仍由 `app/cloud_agent_media.go` 适配共享任务、`app/task_creation.go` 做模型/资源/价格/预算准入。新增生成模式需要能力描述符、真实画布实现及任务适配器，不能只靠策略或技能授权。尚未拆出的领域编排仍在 `app`，不能将本次重构描述为所有 Agent 业务已完全外迁。
+
+| 功能 | 页面入口 | 主要协作模块 |
+| --- | --- | --- |
+| 首页与导航 | `web/src/pages/home/`、`web/src/layouts/user-layout.tsx` | `components/layout/workspace-sidebar-nav.tsx`、`workspace-sidebar-checkin.tsx`、`workspace-sidebar-storage-meter.tsx`、`router.tsx` |
+| 创作工作台 | `web/src/pages/create/index.tsx` | `creation-workspace.tsx`、`creation-conversations.ts`、`creation-types.ts`、`creation-assets.ts`、`creation-references.ts` |
+| 登录注册 | `web/src/pages/auth/` | `stores/use-user-store.ts`、`services/api/auth.ts`、后端 `internal/auth/` |
+| 积分与计费 | `web/src/components/layout/workspace-wallet-modal.tsx`、`pages/admin/components/platform-finance-panel.tsx` | `services/api/wallet.ts`、`services/api/payments.ts`、后端 `internal/app/finance.go`、`internal/app/payment.go`、`payment-plugins/`、`plugin-packages/official-payment-*` |
+| 推广中心 | `web/src/pages/referral/`、`pages/admin/referral/referral-admin-page.tsx`、`pages/admin/users/users-drawer.tsx`（推广人开关） | `services/api/referral.ts`、后端 `internal/handler/referral.go`、`internal/app/referral.go`（设置、资格、绑定、返佣）、`internal/repository/referral.go` |
+| 视频 Token 报价与结算 | `web/src/pages/admin/components/channel-model-price-tier-fields.tsx`、`web/src/components/model-picker.tsx` | `lib/model-pricing.ts`、`services/api/logical-models.ts`；后端 `app/video_token_billing.go` 管像素与时长估算，`app/logical_model_quote.go` 复用准入与价格规则，`app/analytics.go` 提取可信用量，`repository/finance.go` 按订单快照退补差额 |
+| 任务中心 | `web/src/pages/tasks/` | `services/api/task-center.ts`、`services/api/task-text-stream.ts` |
+| 产品模型与渠道选择 | `web/src/components/model-picker.tsx`、`pages/admin/components/channel-model-editor.tsx` | `lib/model-picker-groups.ts` 只构建跨渠道展示分组；`lib/user-session.ts` 透传渠道展示名；`components/model-logo.tsx` 按需加载原色图标；后端 `app/channel_models.go` 校验写入，`app/model_catalog.go` 发布目录，schema v24 增加 `channel_label` |
+| 系统渠道规格利润率与批量调价 | `web/src/pages/admin/components/channel-model-manager.tsx`、`channel-model-reprice-dialog.tsx` | 弹窗按模型分组展示多规格、重新计算与逐项编辑；`channel-model-cost-summary.tsx` 展示价格，`channel-model-pricing.ts` 精确四舍五入并组装最终售价；后端 `handler/finance.go` 接收批量请求，`app/channel_model_pricing.go` 校验权限、最终价格及快照版本，`repository/channel_model_pricing.go` 事务保存及版本冲突检测 |
+| 我的素材 | `web/src/pages/assets/` | `stores/use-asset-store.ts`、`services/image-storage.ts` |
+| 技能库 | `web/src/pages/skills/` | `services/api/skills.ts`、`services/skill-runtime.ts`、`components/skills/skill-runtime-picker.tsx` |
+| 技能工作台（`/skills/:skillId/edit`） | `web/src/pages/skills/workbench/` | `index.tsx` 管工作副本、保存与离开保护；`skill-workbench-explorer.tsx` 文件树与键盘导航；`skill-code-editor.tsx` 单 EditorView + 每标签 EditorState；`skill-quick-open.tsx`；样式 `skill-workbench.css`；纯函数 `lib/skills/skill-workbench-model.ts`（文件树、路径校验、批量操作折叠） |
+| 画布列表 | `web/src/pages/canvas/index.tsx` | `stores/canvas/use-canvas-store.ts` |
+| 画布编辑器 | `web/src/pages/canvas/project.tsx` | `pages/canvas/canvas-project-*`、`pages/canvas/use-canvas-*`、`components/canvas/`、`lib/canvas/`、`stores/canvas/` |
+| 公开分享 | `web/src/pages/canvas/shared.tsx` | `components/canvas/canvas-viewport.tsx`、`services/api/canvas-share.ts` |
+| 管理后台 | `web/src/pages/admin/`、`router.tsx` | `admin-context.tsx`、`users/`、`channels/`、`logs/`、`storyboard-prompts/`、`settings/`、`components/agent-lessons-panel.tsx` |
+| 支付 CSV 导出 | `web/src/pages/admin/payments/payments-page.tsx` | `services/api/payments.ts`、`AdminExportButton`；后端 `handler/payment_export.go`、`app/payment_export.go`、`repository/payment_export.go`（共享筛选、只读快照） |
+
+## AI 拆图工作流
+
+- 配置入口：`web/src/components/canvas/canvas-node-layer-decomposition-dialog.tsx`；编排、并行生成与重试：`web/src/pages/canvas/use-canvas-media-tools.ts`、`use-canvas-generation-retry.ts`。
+- 规划与策略：`web/src/lib/canvas/canvas-image-layer-plan.ts`、`canvas-image-layer-strategy.ts`；原图、规划请求、提取与合成：`web/src/services/canvas-image-layer-*.ts`。
+- 图层组和素材保存：`web/src/pages/canvas/use-canvas-image-layer-groups.ts`、`use-canvas-image-layer-materials.ts`；任务恢复与复制规则：`web/src/lib/canvas/canvas-generation-task-sync.ts`、`canvas-node-copy.ts`。
+- 看图资源归属及实际像素：`backend/internal/app/provider_media_hydration.go`；透明 PNG 参数：`plugin-packages/image-tools/manifest.json`。
+
+## 画布核心
+
+云端 Agent 的提示词维护边界见[画布 Agent 提示词与用户意图](/docs/backend/agent-prompt-policy)：行为策略只由 v17 系统合同提供，动态事实由 `cloud_agent_policy.go` 编译，运行状态消息由 `cloud_agent_prompt_context.go` 统一编码；`cloud_agent_anchor.go` 不再推断用户授权或锁定首轮目标。
+
+Pi SDK 执行前的参数校验失败由 `agent-runtime/pi/agent-runtime.mjs` 转为内部 `tool_validation_failed` 事件，`cloud_agent_pi_tool_rejections.go` 复用工具失败记录与调用游标推进。`cloud_agent_media.go` 在模型目录中投影生成工具的参数名称，`cloud_agent_tools.go` 声明尺寸、分辨率和质量三个独立字段。
+
+| 职责 | 代码位置 |
+| --- | --- |
+| 页面装配和跨域动作协调 | `web/src/pages/canvas/project.tsx` |
+| 画布领域规则和生成协议 | `web/src/lib/canvas/canvas-project-domain.ts`、`canvas-project-generation.ts`、`produced-model.ts` |
+| 项目恢复、持久化和项目级动作 | `web/src/pages/canvas/use-canvas-project-lifecycle.ts` |
+| 画布 operations 同步与本地 journal | `web/src/services/user-data-sync.ts` 协调快照和确认；`web/src/services/canvas-mutation-batches.ts` 按服务端 500 条上限顺序提交、先持久化后发送并保留重放 ID；`web/src/services/api/user-data.ts`、`web/src/lib/canvas/canvas-content.ts`、`web/src/pages/canvas/canvas-sync-status.tsx`、`web/src/stores/use-sync-progress-store.ts` |
+| 内部资源保护与维护快照 | `backend/internal/canvas/canvas_history.go`、`repair_resources.go`、`backend/internal/repository/canvas_history.go`；仅供资源完整性维护和审计，不提供用户历史树、预览或恢复入口 |
+| Patch 历史、生成任务和重试控制 | `web/src/pages/canvas/use-canvas-history.ts`、`use-canvas-generation.ts`、`use-canvas-generation-executor.ts`、`use-canvas-generation-retry.ts` |
+| 文本、图片、视频和音频生成执行 | `web/src/pages/canvas/canvas-*-generation-executor*.ts` |
+| 云端 Agent、助手面板、导演台和全局快捷键控制 | `web/src/components/canvas/canvas-cloud-agent-panel.tsx`、`web/src/pages/canvas/use-canvas-assistant-visibility.ts`、`use-canvas-director.ts`、`use-canvas-keyboard.ts`；画布操作契约在 `web/src/lib/canvas/canvas-operation-contract.ts` |
+| 选择拖拽与连线控制 | `web/src/pages/canvas/use-canvas-selection-controller.ts`、`use-canvas-connection-controller.ts` |
+| 上传、素材插入、媒体工具和短剧编排 | `web/src/pages/canvas/use-canvas-upload.ts`、`use-canvas-timeline-asset-insert.ts`、`use-canvas-media-tools.ts`、`use-canvas-storyboard.ts`、`use-canvas-generation-batches.ts`、`use-canvas-short-drama.ts` |
+| 节点操作、节点编辑和视口导航 | `web/src/pages/canvas/use-canvas-node-operations.ts`、`use-canvas-node-editor.ts`、`use-canvas-viewport-controller.ts` |
+| 小说、画风和角色工作流 | `web/src/pages/canvas/use-canvas-document-workflow.ts` |
+| 派生渲染模型和画布分层 | `web/src/pages/canvas/use-canvas-render-model.ts`、`canvas-project-world-layers.tsx`、`canvas-project-context-menu.tsx`、`canvas-project-status-dialogs.tsx` |
+| 顶栏、反馈和 screen-space 浮层 | `web/src/pages/canvas/canvas-project-top-bar.tsx`、`canvas-project-feedback.tsx`、`canvas-project-selection-toolbar.tsx`、`components/canvas/canvas-workspace-overlays.tsx` |
+| 媒体弹窗装配 | `web/src/pages/canvas/canvas-project-media-dialogs.tsx` |
+| 画布视口、拖拽、缩放和框选 | `web/src/components/canvas/canvas-viewport.tsx`、`web/src/lib/canvas/canvas-live-viewport.ts`；`pages/canvas/use-canvas-image-wheel-resize.ts` 合并单选图片 Ctrl 滚轮尺寸、历史和保存，`lib/canvas/canvas-wheel.ts` 识别离散滚轮，角点与滚轮共用 registry 最小尺寸规则 |
+| 节点渲染与节点工具 | `web/src/components/canvas/canvas-node.tsx`、`canvas-node-hover-toolbar.tsx`、`canvas-node-toolbar.tsx` |
+| 图片多角度、宫格切分与多选框 | `canvas-node-angle-dialog.tsx`、`canvas-angle-scene.tsx`、`canvas-grid-split-picker.tsx`、`web/src/lib/canvas/canvas-grid-split.ts`、`canvas-selection.ts` |
+| 图片自然比例与默认尺寸 | `web/src/lib/canvas/canvas-node-size.ts`；上传、生成结果和派生图片共用尺寸规则，节点调整继续使用现有角点入口 |
+| 图片编辑副本与工具菜单 | `web/src/lib/canvas/tool-registry/definitions/node-hover-tools.tsx` 声明入口；`web/src/pages/canvas/use-canvas-node-operations.ts` 负责带来源连线的复制；`web/src/components/canvas/canvas-node-toolbar.tsx` 与 `canvas-grid-split-picker.css` 共用菜单布局、滚动及子面板视口约束 |
+| 浮层可用区与小屏模式 | `web/src/lib/canvas/canvas-overlay-layout.ts` 计算侧栏/工具区边界并维护面板矩形通知；`canvas-workspace-overlays.tsx` 发布实测面板布局，`canvas-node-toolbar.tsx` 避让；`web/src/hooks/use-focus-mode.ts` 以用户明确偏好优先于小屏默认 |
+| 图片方向与资源保留 | `web/src/pages/canvas/use-canvas-image-rotation.ts` 协调首次副本、只读、锁定和异步提交；`web/src/lib/canvas/canvas-image-edit-copy.ts` 共用编辑副本创建、来源线及空位；`web/src/lib/canvas/canvas-image-rotation.ts` 更新节点与引用行状态；`web/src/services/canvas-image-rotation.ts` 从原图旋转、上传并复用方向资源；原图及派生资源由 `backend/internal/assets/references.go`、`web/src/services/user-data-sync-media.ts`、`canvas-missing-resources.ts` 收集 |
+| 批量表编辑与渲染 | `web/src/components/canvas/canvas-batch-table-node.tsx` 处理行编辑、内部滚动及添加/插入；`web/src/lib/canvas/canvas-batch-window.ts` 限定大表挂载行；`canvas-batch-row-equality.ts` 判断影响行展示的引用变化 |
+| 批量表参考图绑定 | `web/src/pages/canvas/use-canvas-batch-references.tsx` 协调选择、上传、替换确认和按列重置；`web/src/lib/canvas/canvas-batch-references.ts` 同步列默认、保留单格覆盖，维护稳定行/列句柄并筛除离屏格线绘制；`web/src/pages/canvas/use-canvas-batch-table.ts` 保留 AI 列表和既有列模式的行规则 |
+| 批量任务输入冻结 | `web/src/lib/canvas/canvas-batch-table-state.ts` 准备任务；`canvas-batch-input-snapshot.ts` 保存提示词及最小资源引用快照；`web/src/pages/canvas/use-canvas-generation-batches.ts` 持久化队列与重试，`use-canvas-generation-executor.ts` 以快照构建本次输入，不读取排队期间变更后的源图 |
+| 生成 Composer | `web/src/components/canvas/canvas-node-prompt-panel.tsx`、`canvas-config-composer.tsx` |
+| 风格中心、用户风格编辑与项目快照 | `web/src/components/canvas/canvas-style-picker-modal.tsx`、`style-profile-editor-modal.tsx`、`style-asset-binding-modal.tsx`、`web/src/lib/canvas/style-profile.ts`、`web/src/services/api/style-profiles.ts` |
+| 分镜脚本节点 | `web/src/components/canvas/canvas-script-node.tsx` |
+| 3D 导演台 | `web/src/components/canvas/director/` |
+| 节点生成上下文 | `web/src/components/canvas/canvas-node-generation.ts` |
+| 布局和连线算法 | `web/src/lib/canvas/canvas-layout.ts`、`canvas-frame.ts` |
+| 任务结果准备与按节点提交 | `web/src/lib/canvas/canvas-generation-task-sync.ts`、`canvas-generation-result.ts`；持久化协调在 `web/src/services/canvas-generation-consumer.ts` |
+| 编辑命令与批次状态投影 | `web/src/lib/canvas/canvas-editor-state.ts`、`canvas-task-state.ts`、`canvas-image-batch-retry.ts` |
+| 视口节点选择与输入关系解析 | `web/src/lib/canvas/canvas-node-visibility.ts`、`canvas-resource-references.ts` |
+| 本地持久化状态 | `web/src/stores/canvas/use-canvas-store.ts` |
+| 云端 Agent 运行与事件 API | `web/src/services/api/agent.ts`、`web/src/components/canvas/canvas-cloud-agent-panel.tsx` |
+| Agent 画布上下文、操作与历史 | `web/src/lib/canvas/canvas-context-discovery.ts`、`canvas-operation-contract.ts`、`web/src/pages/canvas/use-canvas-operation-history.ts` |
+| 官方提示词目录与客户端起始稿 | `backend/internal/prompts/`、`web/src/lib/prompts/` |
+
+## 前端 HTTP 与产品壳
+
+| 职责 | 代码位置 |
+| --- | --- |
+| 业务 JSON 调用面 | `web/src/services/api/request.ts` 的 `http`；拦截器仍挂 `apiClient` |
+| 自定义渠道传输 | `web/src/services/api/channel-transport.ts`，image / video / audio 只组协议 |
+| 自带外壳的弹窗 / 侧栏 | `web/src/components/ui/product/app-modal/`、`app-drawer/` |
+
+## 后端调用链
+
+AutoDL 画面规格由 `app/model_capability_screen_spec.go` 读取官方插件工作流合同（精确工作流优先，未声明的 ID 回退到 `*` 默认预设），校验所选分辨率及默认值，允许自定义标签；`task_creation.go` 在价格选择之前归一化，任务校验与 `provider_video.go` 再次使用同一规则。前端 `lib/video-screen-specs.ts` 管理插件预设、所选规格与工作流切换，`ModelCapabilityEditor` 复用到系统及自定义渠道；无开关或独立草稿。
+
+```text
+HTTP 请求 -> handler -> service（稳定导入面 / 别名）-> app（组合根）-> 业务域包 -> repository/model
+                                                                     |
+                                                                     -> protocol / payment / generation / outbound
+```
+
+`internal/service` 只再导出 `internal/app` 的类型、常量和包级函数，handler/cmd 仍 import `internal/service`。组合根和尚未拆出的业务实现在 `internal/app`。已抽出的域包不得 import `service` 或 `app`（防回环）。共享错误码与 ID/字符串工具在 `internal/kernel`。
+
+### 目标业务域
+
+| 域包 | 职责 | 现状 |
+| --- | --- | --- |
+| `service` | HTTP 稳定导入面 | **已变薄**：仅 `aliases_*.go` / `doc.go`（4 个文件） |
+| `app` | 组合根、跨域编排、尚未拆出的业务实现 | **承接原 service 实现**：`provider_*`、`task_*`、`project_*`、OSS/配额、渠道、管理后台等 |
+| `platform` | 运行时策略、功能开关、限流/并发协调、worker 与读缓存 | **已抽出**：`internal/platform`；`app/platform_bridge.go` 委托 |
+| `kernel` | 结构化错误、错误码、ID 与通用字符串/配额换算 | **已抽出**：`internal/kernel` |
+| `generation` | 协议注册表和生成域边界 | **部分抽出**：`internal/generation` 提供协议注册入口；`provider_*` 执行簇仍在 `app` |
+| `outbound` | 出站 URL/Header 校验、SSRF 防护、HTTP 客户端 | **已抽出**：`internal/outbound` |
+| `skills` | 技能库、GitHub/ZIP 包、内置技能种子、后台同步 | **已抽出**：`internal/skills` |
+| `prompts` | 提示词模板、用户定制、风格档案、JSON 抽取 | **已抽出**：`internal/prompts` |
+| `auth` | 登录注册、OAuth、邮件验证码、LibTV/TapNow 导入 | **已抽出**：`internal/auth` |
+| `canvas` | 画布公开分享、媒体引用守卫、用户画布/素材库同步 | **已抽出**：`internal/canvas` |
+| `assets` | 资源 URL/引用解析、流式交付类型 | **部分抽出**：`internal/assets`；OSS/配额/转码仍在 `app` |
+| `agentcontext` | Agent 上下文检查点的编码、解析与压缩提示词（provider 中立，不含触发与调度） | **已抽出**：`internal/agentcontext`；触发、暂停与恢复在 `app/cloud_agent_context_compaction.go` |
+
+组合根原则：`service.New`（委托 `app.New`）组装各域服务；coordinator 不得再持有整个 `*Service` 回灌域包。
+
+| 功能 | Handler | Service / 域包 / Repository |
+| --- | --- | --- |
+| 路由与中间件 | `handler/api.go`、`handler/routes.go` | `RegisterCanvasAPI` 挂到 `/api`。合同见 `docs/content/docs/backend/http-api.mdx`、`handler/openapi.yaml`。 |
+| 用户和管理员 | `handler/auth.go` | `internal/auth`、`internal/app/admin.go`（经 `service` 别名） |
+| 管理后台批量操作 | `handler/auth.go` | `internal/app/admin.go`、`repository/admin_audit.go`、`repository/analytics.go` |
+| 管理后台存储资源 | `handler/admin_storage.go` | `internal/app/admin_storage.go`、`repository/admin_storage.go` |
+| 资源与请求策略 | `handler/auth.go`、`handler/security.go` | `internal/platform`、`internal/app/upload_quota.go`、`storage_quota.go`、`coordination.go` |
+| 存储空间套餐与只读 | `handler/storage_guard.go`、`handler/storage_grants.go` | `internal/app/storage_capacity.go`（有效容量、宽限期与只读、扩容赠送/撤销）、`payment_products.go`（商品类型）、`repository/storage_grants.go`、`repository/payment.go`（`grantPaymentStorage`） |
+| 推广中心 | `handler/referral.go` | `internal/app/referral.go`（`referral` 设置、`referralEligible`、注册绑定 `bindReferral`、入账后 `grantReferralCommission`）、`repository/referral.go`（`GrantReferralCommission` 同事务写返佣、流水与余额） |
+| 模型响应拦截 | `handler/response_interception.go`、`handler/custom_proxy.go` | `internal/app/response_interception.go`、`repository/repository.go` |
+| 异步任务、文本 SSE 与 Agent | `handler/routes.go` | `internal/app` 组合根（`provider_*` 仍在此）+ `internal/generation` + `internal/outbound` + `task_text_stream.go`、`text_replay.go` |
+| 用户画布与素材 | `handler/user_data.go` | `internal/canvas` |
+| 文件和 OSS | `handler/routes.go` | `internal/app/resource.go`、`settings.go` |
+| 画布分享 | `handler/canvas_share.go` | `internal/canvas` |
+| 技能库 | `handler/skills.go` | `internal/skills`、`repository/skills.go`；在线编辑在 `skills/skill_packages_edit.go`，乐观锁写入在 `repository/skill_packages.go` 的 `AddSkillVersionIfCurrent` |
+| 提示词模板 | `handler/auth.go`、`handler/user_data.go` | `internal/prompts` |
+| 用户风格库 | `handler/style_profile.go` | `internal/prompts`、`repository/style_profile.go` |
+| 用量分析 | `handler/admin_analytics.go` | `internal/app/analytics.go`、`repository/analytics.go` |
+
+登录恢复仅初始化当前账号缓存与增量同步会话，不再自动读取 `GET /api/user-data/snapshot`。画布库通过分页摘要加载，打开、导出、重命名时按 ID 读取完整画布，引用素材通过批量 ID 接口读取；旧快照接口仍保留供显式调用。实现见 `internal/canvas/user_data_page.go` 和前端 `services/user-data-sync.ts`。用户库素材写入（`UpsertUserAsset` / `ReplaceUserAssets`）在 `internal/canvas/user_asset_document.go` 校验 SPA 合同：`kind`、`coverUrl`、`tags` 字符串数组，以及按类型完整的 `data`。不完整 payload 在入库时拒绝；GET 仍返回已保存的原始 JSON。上游异构 JSON 的可选字符串仍走 `stringField`；任务 ID 等关键字段走 `firstJSONString`，数字 ID 不再被当成“缺字段”。
+
+后端托管的文本生成通过 `GET /api/tasks/:id/text-events` 返回 `progress`、`delta` 和 `terminal` 事件。`delta` 的递增事件 ID 是断线续传游标，前端使用 `?after=<id>` 恢复；分镜任务复用该通道实时接收阶段和进度，但分镜结构和 Agent 工具参数仍在完整响应结束并校验通过后原子应用，不执行半截 JSON。
+
+## 其他入口
+
+- 旧版 `canvas-agent/` 和 Codex App/MCP 插件已删除；Agent 运行统一由后端云端控制面承载。
+- `docs/content/docs/`：产品、操作、开发和进度文档。
+- `docker-compose.local.yml`：本地前后端编排；`nginx.conf`：生产静态资源和 API 代理。
+
+## 修改原则
+
+- HTTP 参数与响应只在 handler 处理，业务规则进入 service。
+- 页面保留流程协调；可独立理解和测试的算法进入同业务域的 `lib`。
+- 新增功能时只更新本页的主要入口，不增加逐文件清单。
+
+## 画布工具链路
+
+- `backend/internal/handler/tools.go`：登录态工具列表、详情、收藏、创建与删除。
+- `internal/service` 别名 → `internal/app/tools_bridge.go`（资源归属校验）→ `internal/tools`（可见性策略、输入合同、token 展开和内置种子）→ `internal/repository/tools.go`。
+- 任务入队 `internal/app/task_creation.go` 与生成执行 `internal/app/provider.go` 共用严格 token 解析。
+- 前端 `canvas-tool-presentation.ts` 共享轻量展示配置，`canvas-resource-references.ts` 统一 token；节点提示词与工具面板共用同一持久状态，不复制到 metadata 风格字段。
+- `canvas-workspace-panel.tsx` 提供常驻左侧菜单，按需挂载节点、资产、工具、任务和历史面板；资产面板复用素材分页服务与画布插入合同；主分支项目章节侧栏与工作区互斥。
+
+## 技能策展
+
+`internal/skills/skill_curation.go` 负责校验，`internal/repository/skill_curation.go` 负责分类持久化与 CAS 审计交易，handler／app bridge 接入原有技能域。
+
+`skill_curation_roots.go` 扩展动态根维护、有效根查询和空表回落；数据库迁移 47 接续 46。
+
+## 创作首页纵深画廊与灵感库
+
+- `web/src/pages/create/creation-inspiration-tunnel.tsx`、`creation-inspiration-tunnel.css`：纵深画廊的排布、随机取样、封面就绪门控与样式。
+- `web/src/pages/inspirations/`：灵感页（`index.tsx`）、详情弹窗、编辑弹窗与 `inspirations.css`。
+- `web/src/lib/inspirations/catalog.ts`、`resolve.ts`、`source-revisions.ts`：来源登记表、条目类型与解析、原创条目、上游版本号。
+- `web/src/services/inspiration-catalog.ts`：全量目录与画廊池的运行时加载、内存缓存与失败退回。
+- `web/src/stores/use-inspiration-store.ts`：自建／覆盖／隐藏／收藏的本地持久化与导入导出。
+- `web/scripts/import-inspirations.mjs`：外部来源同步、等距抽取、缩略图生成与画廊池落盘；产物在 `web/public/inspirations/` 与 `web/public/inspiration-thumbs/`。
+
+## 画布外观
+
+`web/src/lib/canvas/canvas-appearance.ts` 管理预设快照、浅深记忆与默认偏好；`web/src/components/canvas/canvas-appearance-controls.tsx` 管理展开与微调；`web/src/components/canvas/canvas-toolbar.tsx` 限制外观和添加节点浮层尺寸。`web/src/stores/canvas/use-canvas-store.ts` 在创建时写入实际外观与线网格默认值，后续沿用画布持久化。

@@ -1,0 +1,239 @@
+name: Publish container images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# main 和 tag 的同一提交串行进入；后到的一轮复用已校验的 SHA 镜像。
+concurrency:
+  group: publish-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Quality checks
+    uses: ./.github/workflows/quality.yml
+
+  prepare:
+    name: Resolve build version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      image_tag: ${{ steps.info.outputs.image_tag }}
+      build_time: ${{ steps.info.outputs.build_time }}
+      owner: ${{ steps.info.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: info
+        name: Validate release metadata
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            [[ "$version" == "$GITHUB_REF_NAME" ]] || { echo "VERSION=$version does not match tag $GITHUB_REF_NAME" >&2; exit 1; }
+            grep -Fqx "## $version" CHANGELOG.md || { echo "CHANGELOG.md is missing ## $version" >&2; exit 1; }
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${version#v}" >> "$GITHUB_OUTPUT"
+          # 相同提交的 main/tag/重跑使用相同时间，避免人为破坏缓存。
+          echo "build_time=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+          echo "owner=${REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+  # 镜像构建与质量检查并行：构建只推送不可变的 sha-<commit> 标签，不会被部署使用；
+  # 可变标签（latest / 版本号）的推广在 publish 中进行，并且必须等待 checks 通过。
+  # 这样发布总耗时约为 max(检查, 构建) 而不是两者相加。
+  build:
+    name: Build ${{ matrix.image }} (${{ matrix.arch }})
+    needs: [prepare]
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Web 的构建阶段固定 BUILDPLATFORM，静态文件只编译一次。
+          - image: open-ai-canvas-web
+            dockerfile: Dockerfile
+            arch: multi
+            platforms: linux/amd64,linux/arm64
+            runner: ubuntu-24.04
+          - image: open-ai-canvas-backend
+            dockerfile: backend/Dockerfile
+            arch: amd64
+            platforms: linux/amd64
+            runner: ubuntu-24.04
+          - image: open-ai-canvas-backend
+            dockerfile: backend/Dockerfile
+            arch: arm64
+            platforms: linux/arm64
+            runner: ubuntu-24.04-arm
+          - image: open-ai-canvas-yingce-agent
+            dockerfile: yingce-agent/Dockerfile
+            arch: multi
+            platforms: linux/amd64,linux/arm64
+            runner: ubuntu-24.04
+    env:
+      IMAGE: ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reuse an existing commit image
+        id: existing
+        env:
+          IMAGE_REF: ${{ env.IMAGE }}:sha-${{ github.sha }}-${{ matrix.arch }}
+        run: bash .github/scripts/resolve-image.sh "$IMAGE_REF"
+      - name: Build and push immutable commit image
+        id: build
+        # A version tag is a release boundary: rebuild its image even if a SHA tag
+        # already exists, so a stale/corrupt SHA tag cannot be promoted as a release.
+        if: startsWith(github.ref, 'refs/tags/v') || steps.existing.outputs.found != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          build-args: |
+            BUILD_VERSION=${{ needs.prepare.outputs.version }}
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ needs.prepare.outputs.build_time }}
+          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+      - name: Record image digest
+        env:
+          DIGEST: ${{ steps.existing.outputs.digest || steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid image digest" >&2; exit 1; }
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ matrix.image }} manifest
+    needs: [checks, prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [open-ai-canvas-web, open-ai-canvas-backend, open-ai-canvas-yingce-agent]
+    # 不同提交可并行编译，但同一镜像的可变标签更新必须串行。
+    concurrency:
+      group: image-tags-${{ matrix.image }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.image }}-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote verified digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}
+          VERSION_TAG: ${{ needs.prepare.outputs.image_tag }}
+          DIGEST_DIR: ${{ runner.temp }}/digests
+          EXPECTED_DIGESTS: ${{ matrix.image == 'open-ai-canvas-backend' && '2' || '1' }}
+        run: bash .github/scripts/promote-image.sh
+
+  release:
+    name: Publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Build Host Updater
+        working-directory: backend
+        shell: bash
+        run: |
+          mkdir -p ../dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "../dist/open-ai-canvas-host-updater-linux-$arch" ./cmd/host-updater
+          done
+          cd ../dist
+          sha256sum open-ai-canvas-host-updater-linux-* > SHA256SUMS
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          version="$GITHUB_REF_NAME"
+          awk -v heading="## $version" '
+            $0 == heading { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > dist/RELEASE_NOTES.md
+          test -s dist/RELEASE_NOTES.md || printf '影策 %s\n' "$version" > dist/RELEASE_NOTES.md
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          prerelease_args=()
+          latest_args=()
+          # A fourth numeric component is a formal patch release; prerelease tags must use an explicit suffix.
+          if [[ "$GITHUB_REF_NAME" == *-* || "$GITHUB_REF_NAME" == *.rc* ]]; then
+            prerelease_args+=(--prerelease)
+          else
+            latest_args+=(--latest)
+          fi
+          assets=(
+            dist/open-ai-canvas-host-updater-linux-amd64
+            dist/open-ai-canvas-host-updater-linux-arm64
+            dist/SHA256SUMS
+            docker-compose.deploy.yml
+          )
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file dist/RELEASE_NOTES.md \
+              "${prerelease_args[@]}" \
+              "${latest_args[@]}"
+          fi

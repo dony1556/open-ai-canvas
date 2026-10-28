@@ -1,0 +1,34 @@
+Open AI Canvas
+Copyright (C) 2026 ddcat and contributors
+
+The inherited Open AI Canvas code is provided under the license reproduced below.
+
+This distribution includes third-party and inherited material under permissive open-source licenses. Required copyright and license notices are retained in LICENSE files and in the corresponding package directories.
+
+Material changes in this repository are maintained by the Open AI Canvas contributors. They include a multi-user Go backend, task processing and analytics, private resource storage, canvas sharing, film-production workflows, canvas UI refactoring, and cloud Agent integrations.
+
+Third-party packages remain subject to the licenses declared by their respective authors. Product names and logos under web/public/icons are the property of their respective owners and do not imply endorsement.
+
+Inherited Open AI Canvas license:
+
+MIT License
+
+Copyright (c) 2026 ddcat and Open AI Canvas contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

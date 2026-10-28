@@ -1,0 +1,413 @@
+package repository
+
+import (
+	"strings"
+	"time"
+
+	"yingce/backend/internal/model"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type AnalyticsFilter struct {
+	From       time.Time
+	To         time.Time
+	UserID     string
+	Model      string
+	ChannelID  string
+	Capability string
+}
+
+type APICallLogFilter struct {
+	AnalyticsFilter
+	RecordType string
+	Keyword    string
+	Status     string
+	IDs        []string
+	Page       int
+	Limit      int
+}
+
+// PublicModelAvailabilityFilter limits the public availability read model to
+// system catalog channel models. Keeping this query separate from admin
+// analytics avoids exposing the admin payload or accidentally including user
+// owned channels in a public response.
+type PublicModelAvailabilityFilter struct {
+	From       time.Time
+	To         time.Time
+	ChannelIDs []string
+}
+
+func (r *Repository) RecordUserActivity(userID string, event string, count int, now time.Time) error {
+	if userID == "" {
+		return nil
+	}
+	if count <= 0 {
+		count = 1
+	}
+	day := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	activity := model.UserDailyActivity{ID: userID + ":" + day.Format("2006-01-02"), Day: day, UserID: userID, CreatedAt: now, UpdatedAt: now}
+	updates := map[string]any{"updated_at": now}
+	switch event {
+	case "login":
+		activity.LoginCount = count
+		updates["login_count"] = gorm.Expr("user_daily_activities.login_count + ?", count)
+	case "task":
+		activity.TaskCount = count
+		updates["task_count"] = gorm.Expr("user_daily_activities.task_count + ?", count)
+	case "agent_message":
+		activity.AgentMessageCount = count
+		updates["agent_message_count"] = gorm.Expr("user_daily_activities.agent_message_count + ?", count)
+	case "canvas":
+		activity.CanvasActive = true
+		updates["canvas_active"] = true
+	case "asset":
+		activity.AssetCount = count
+		updates["asset_count"] = gorm.Expr("user_daily_activities.asset_count + ?", count)
+	case "resource":
+		activity.ResourceCount = count
+		updates["resource_count"] = gorm.Expr("user_daily_activities.resource_count + ?", count)
+	default:
+		return nil
+	}
+	if event != "login" {
+		activity.FirstActiveAt = &now
+		activity.LastActiveAt = &now
+		updates["first_active_at"] = gorm.Expr("COALESCE(user_daily_activities.first_active_at, ?)", now)
+		updates["last_active_at"] = now
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "day"}, {Name: "user_id"}},
+		DoUpdates: clause.Assignments(updates),
+	}).Create(&activity).Error
+}
+
+func (r *Repository) AnalyticsTasks(filter AnalyticsFilter) ([]model.Task, error) {
+	var tasks []model.Task
+	query := whereTimeRange(r.db.Select("id", "user_id", "type", "status", "operation", "provider", "model", "started_at", "completed_at", "created_at"), "created_at", filter.From, filter.To)
+	if filter.UserID != "" {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	if filter.Model != "" {
+		query = query.Where("model = ?", filter.Model)
+	}
+	if filter.Capability != "" {
+		if filter.Capability == "text" {
+			query = query.Where("type LIKE ? OR type LIKE ? OR type LIKE ?", "%text%", "%storyboard%", "%agent%")
+		} else {
+			query = query.Where("type LIKE ?", "%"+filter.Capability+"%")
+		}
+	}
+	return tasks, query.Find(&tasks).Error
+}
+
+func (r *Repository) AnalyticsAPICallLogs(filter AnalyticsFilter) ([]model.ApiCallLog, error) {
+	var logs []model.ApiCallLog
+	query := r.apiCallLogQuery(filter)
+	return logs, query.Omit("RequestBody", "ResponseBody").Find(&logs).Error
+}
+
+// PublicModelAvailabilityLogs returns the compact, user-facing create
+// outcomes used by the model catalog availability read model. Polling,
+// downloads, uploads and local bookkeeping are deliberately excluded here.
+func (r *Repository) PublicModelAvailabilityLogs(filter PublicModelAvailabilityFilter) ([]model.ApiCallLog, error) {
+	var logs []model.ApiCallLog
+	if len(filter.ChannelIDs) == 0 || !filter.To.After(filter.From) {
+		return logs, nil
+	}
+	query := whereTimeRange(r.db.Select("channel_id", "model", "status", "created_at"), "api_call_logs.created_at", filter.From, filter.To).
+		Where("api_call_logs.channel_id IN ?", filter.ChannelIDs).
+		Where("api_call_logs.user_id <> ''").
+		Where("api_call_logs.model <> ''").
+		Where("api_call_logs.request_kind = ?", "create").
+		Where("api_call_logs.status IN ?", []model.ApiCallStatus{model.ApiCallStatusSucceeded, model.ApiCallStatusFailed}).
+		Order("api_call_logs.created_at asc")
+	return logs, query.Find(&logs).Error
+}
+
+// PublicModelRecentLogs 从当前时间往前推查询指定渠道最近的调用日志（按时间倒序），用于计算每个模型最近的执行结果状态点。
+func (r *Repository) PublicModelRecentLogs(channelIDs []string, limit int) ([]model.ApiCallLog, error) {
+	var logs []model.ApiCallLog
+	if len(channelIDs) == 0 {
+		return logs, nil
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	query := r.db.Select("channel_id", "model", "status", "created_at").
+		Where("api_call_logs.channel_id IN ?", channelIDs).
+		Where("api_call_logs.user_id <> ''").
+		Where("api_call_logs.model <> ''").
+		Where("api_call_logs.request_kind = ?", "create").
+		Where("api_call_logs.status IN ?", []model.ApiCallStatus{model.ApiCallStatusSucceeded, model.ApiCallStatusFailed}).
+		Order("api_call_logs.created_at desc").
+		Limit(limit)
+	return logs, query.Find(&logs).Error
+}
+
+func (r *Repository) AnalyticsActivities(filter AnalyticsFilter) ([]model.UserDailyActivity, error) {
+	var activities []model.UserDailyActivity
+	query := r.db.Where("day >= ? AND day < ?", filter.From, filter.To)
+	if filter.UserID != "" {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	return activities, query.Find(&activities).Error
+}
+
+func (r *Repository) QueryAPICallLogs(filter APICallLogFilter) ([]model.ApiCallLog, int64, error) {
+	if filter.Page <= 0 {
+		filter.Page = 1
+	}
+	if filter.Limit <= 0 || filter.Limit > 200 {
+		filter.Limit = 50
+	}
+	var total int64
+	// GORM 会把 Distinct 状态保留在同一查询链；计数和分页必须分别构造，避免 PostgreSQL 的 DISTINCT + ORDER BY 冲突。
+	if err := r.filteredAPICallLogQuery(filter).Model(&model.ApiCallLog{}).Distinct("api_call_logs.id").Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var logs []model.ApiCallLog
+	err := r.filteredAPICallLogQuery(filter).Omit("RequestBody", "ResponseBody").Order("api_call_logs.created_at desc").Offset((filter.Page - 1) * filter.Limit).Limit(filter.Limit).Find(&logs).Error
+	return logs, total, err
+}
+
+func (r *Repository) ExportAPICallLogs(filter APICallLogFilter, limit int) ([]model.ApiCallLog, error) {
+	if limit <= 0 || limit > 10_000 {
+		limit = 10_000
+	}
+	query := r.filteredAPICallLogQuery(filter)
+	if len(filter.IDs) > 0 {
+		query = query.Where("api_call_logs.id IN ?", filter.IDs)
+	}
+	var logs []model.ApiCallLog
+	err := query.Omit("RequestBody", "ResponseBody").Order("api_call_logs.created_at desc").Limit(limit).Find(&logs).Error
+	return logs, err
+}
+
+func (r *Repository) filteredAPICallLogQuery(filter APICallLogFilter) *gorm.DB {
+	query := r.apiCallLogQuery(filter.AnalyticsFilter)
+	switch filter.RecordType {
+	case "download":
+		query = query.Where("api_call_logs.request_kind = ?", "download")
+	case "all":
+	default:
+		query = visibleAPICallLogQuery(query).Where("COALESCE(api_call_logs.request_kind, '') NOT IN ?", []string{"download", "upload", "local_save", "local_fallback", "offload", "register"})
+	}
+	if value := strings.TrimSpace(filter.Keyword); value != "" {
+		pattern := "%" + strings.ToLower(value) + "%"
+		query = query.
+			Joins("LEFT JOIN users ON users.id = api_call_logs.user_id").
+			Joins("LEFT JOIN model_channels ON model_channels.id = api_call_logs.channel_id").
+			Where(
+				"lower(api_call_logs.user_id) LIKE ? OR lower(users.username) LIKE ? OR lower(users.display_name) LIKE ? OR lower(api_call_logs.channel_id) LIKE ? OR lower(model_channels.name) LIKE ? OR lower(api_call_logs.model) LIKE ? OR lower(api_call_logs.path) LIKE ? OR lower(api_call_logs.provider_request_id) LIKE ? OR lower(api_call_logs.error_code) LIKE ? OR lower(api_call_logs.error) LIKE ?",
+				pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern,
+			)
+	}
+	if filter.Status != "" {
+		query = query.Where("api_call_logs.status = ?", filter.Status)
+	}
+	return query
+}
+
+func (r *Repository) APICallLogTasks(ids []string) ([]model.Task, error) {
+	if len(ids) == 0 {
+		return []model.Task{}, nil
+	}
+	var tasks []model.Task
+	err := r.db.Select("id", "user_id", "type", "status", "result_json", "media_stage").Where("id IN ?", ids).Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *Repository) LatestProviderRequestIDForTask(taskID string) (string, error) {
+	var log model.ApiCallLog
+	err := r.db.Select("provider_request_id").
+		Where("task_id = ? AND provider_request_id <> ''", taskID).
+		Order("created_at desc").
+		First(&log).Error
+	return strings.TrimSpace(log.ProviderRequestID), err
+}
+
+// LatestProviderRequestIDsForTasks returns the newest upstream request ID per task.
+// Task list queries intentionally select a narrow read model; this bulk lookup
+// hydrates IDs recorded in API logs so the UI can hide cancellation after the
+// upstream request has been accepted even when the task row was not updated yet.
+func (r *Repository) LatestProviderRequestIDsForTasks(taskIDs []string) (map[string]string, error) {
+	result := make(map[string]string, len(taskIDs))
+	if len(taskIDs) == 0 {
+		return result, nil
+	}
+	var logs []model.ApiCallLog
+	err := r.db.Select("task_id", "provider_request_id", "created_at").
+		Where("task_id IN ? AND provider_request_id <> ''", taskIDs).
+		Order("created_at desc").
+		Find(&logs).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, log := range logs {
+		taskID := strings.TrimSpace(log.TaskID)
+		providerRequestID := strings.TrimSpace(log.ProviderRequestID)
+		if taskID == "" || providerRequestID == "" {
+			continue
+		}
+		if _, exists := result[taskID]; !exists {
+			result[taskID] = providerRequestID
+		}
+	}
+	return result, nil
+}
+
+// APICallLogUsageForTask 返回一次任务调用里上游上报的用量。
+// 这是模型自己的分词器算出的计数，是上下文压力可以采信的权威锚点；
+// 没有上报（usage_available=false 或输入为 0）时返回 false，调用方退回本地估算。
+func (r *Repository) APICallLogUsageForTask(userID, taskID string) (model.ApiCallLog, bool, error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(taskID) == "" {
+		return model.ApiCallLog{}, false, nil
+	}
+	var log model.ApiCallLog
+	err := r.db.Where("user_id = ? AND task_id = ? AND capability = ? AND status = ? AND usage_available = ?", userID, taskID, "text", model.ApiCallStatusSucceeded, true).
+		Order("created_at DESC").Limit(1).Find(&log).Error
+	if err != nil {
+		return model.ApiCallLog{}, false, err
+	}
+	if log.ID == "" || log.InputTokens <= 0 {
+		return model.ApiCallLog{}, false, nil
+	}
+	return log, true, nil
+}
+
+// LatestAPICallForTask 返回任务最近一次非轮询上游调用的失败摘要。
+func (r *Repository) LatestAPICallForTask(taskID string) (model.ApiCallLog, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return model.ApiCallLog{}, nil
+	}
+	var log model.ApiCallLog
+	err := r.db.Select("status,status_code,error_code,error").Where("task_id = ? AND request_kind <> ?", taskID, "poll").
+		Order("created_at DESC").Limit(1).Find(&log).Error
+	return log, err
+}
+
+// LatestAPICallStatusForTask 返回任务最近一次上游调用的 HTTP 状态码；
+// 任务没收到任何上游响应（例如网络错误）时返回 0。
+func (r *Repository) LatestAPICallStatusForTask(taskID string) (int, error) {
+	log, err := r.LatestAPICallForTask(taskID)
+	return log.StatusCode, err
+}
+
+func (r *Repository) HasAPICallLogForTask(taskID string) (bool, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return false, nil
+	}
+	var count int64
+	err := r.db.Model(&model.ApiCallLog{}).Where("task_id = ?", taskID).Count(&count).Error
+	return count > 0, err
+}
+
+// HasVisibleFailedAPICallLogForTask 判断管理端默认请求明细里是否已经有这条任务的失败记录。
+// 轮询、下载、上传和本地保存默认不出现在请求日志列表，不能据此认为用户可见的失败已经被记录。
+func (r *Repository) HasVisibleFailedAPICallLogForTask(taskID string) (bool, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return false, nil
+	}
+	var count int64
+	err := r.db.Model(&model.ApiCallLog{}).
+		Where("task_id = ? AND status = ? AND COALESCE(request_kind, '') NOT IN ?", taskID, model.ApiCallStatusFailed, []string{"poll", "download", "upload", "local_save", "local_fallback", "offload", "register"}).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func visibleAPICallLogQuery(query *gorm.DB) *gorm.DB {
+	// 轮询属于一次生成调用的内部状态查询，管理端不单独展示。
+	return query.Where("api_call_logs.request_kind <> ?", "poll")
+}
+
+func (r *Repository) AsyncMediaAPICallRoot(log model.ApiCallLog) (*model.ApiCallLog, error) {
+	var root model.ApiCallLog
+	query := r.db.Where("capability = ? AND request_kind = ?", log.Capability, "create")
+	if log.TaskID != "" {
+		query = query.Where("task_id = ?", log.TaskID)
+	} else {
+		query = query.Where("user_id = ? AND channel_id = ? AND provider_request_id = ?", log.UserID, log.ChannelID, log.ProviderRequestID)
+	}
+	if err := query.Order("created_at desc").First(&root).Error; err != nil {
+		return nil, err
+	}
+	return &root, nil
+}
+
+// VideoAPICallRoot 保留旧调用面的兼容别名。
+func (r *Repository) VideoAPICallRoot(log model.ApiCallLog) (*model.ApiCallLog, error) {
+	log.Capability = "video"
+	return r.AsyncMediaAPICallRoot(log)
+}
+
+// whereTimeRange compares instants. SQLite stores time.Time as offset text, so a
+// lexicographic compare against a UTC bound hides records written after local
+// midnight until the UTC date rolls forward.
+func whereTimeRange(query *gorm.DB, column string, from, to time.Time) *gorm.DB {
+	switch column {
+	case "created_at", "api_call_logs.created_at":
+	default:
+		return query.Where("1 = 0")
+	}
+	if query.Dialector.Name() == "sqlite" {
+		epochColumn := column + "_epoch"
+		return query.Where(epochColumn+" >= ? AND "+epochColumn+" < ?", from.Unix(), to.Unix())
+	}
+	return query.Where(column+" >= ? AND "+column+" < ?", from, to)
+}
+
+func (r *Repository) apiCallLogQuery(filter AnalyticsFilter) *gorm.DB {
+	query := whereTimeRange(r.db, "api_call_logs.created_at", filter.From, filter.To)
+	if filter.UserID != "" {
+		query = query.Where("api_call_logs.user_id = ?", filter.UserID)
+	}
+	if filter.Model != "" {
+		query = query.Where("api_call_logs.model = ?", filter.Model)
+	}
+	if filter.ChannelID != "" {
+		query = query.Where("api_call_logs.channel_id = ?", filter.ChannelID)
+	}
+	if filter.Capability != "" {
+		query = query.Where("api_call_logs.capability = ?", filter.Capability)
+	}
+	return query
+}
+
+func (r *Repository) ModelPricings() ([]model.ModelPricing, error) {
+	var items []model.ModelPricing
+	return items, r.db.Order("model asc, capability asc").Find(&items).Error
+}
+
+func (r *Repository) ModelPricing(channelID string, modelName string, capability string) (*model.ModelPricing, error) {
+	var pricing model.ModelPricing
+	query := r.db.Where("model = ? AND capability = ?", modelName, capability)
+	if channelID != "" {
+		query = query.Where("channel_id IN ?", []string{channelID, ""}).Order("channel_id desc")
+	} else {
+		query = query.Where("channel_id = ?", "")
+	}
+	if err := query.First(&pricing).Error; err != nil {
+		return nil, err
+	}
+	return &pricing, nil
+}
+
+func (r *Repository) ModelPricingByID(id string) (*model.ModelPricing, error) {
+	var pricing model.ModelPricing
+	if err := r.db.First(&pricing, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &pricing, nil
+}
+
+func (r *Repository) DeleteModelPricing(id string) error {
+	return r.db.Delete(&model.ModelPricing{}, "id = ?", id).Error
+}
+
+func (r *Repository) CurrentQueuedTaskCount() (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Task{}).Where("status IN ?", []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).Count(&count).Error
+	return count, err
+}

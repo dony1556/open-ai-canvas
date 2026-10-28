@@ -1,0 +1,338 @@
+package app
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"yingce/backend/internal/logging"
+	"yingce/backend/internal/model"
+)
+
+// ModelCatalogSource 标识创作目录来自系统渠道模型。
+type ModelCatalogSource string
+
+const (
+	// ModelCatalogSourceSystem 表示目录由脱敏后的系统渠道与渠道模型组成。
+	ModelCatalogSourceSystem ModelCatalogSource = "system"
+)
+
+// ModelCatalogResponse 是创作端模型选择的统一读模型。
+// Channels 为唯一数据源；Models 固定为空，两个集合始终序列化为数组。
+type ModelCatalogResponse struct {
+	Source   ModelCatalogSource     `json:"source"`
+	Models   []PublicLogicalModel   `json:"models"`
+	Channels []PublicChannelCatalog `json:"channels"`
+}
+
+// PublicModelAvailability is the historical signal shown next to a model
+// without changing the binary current availability decision above it.
+// Rate24h is nil for no-data or insufficient-sample windows.
+type PublicModelAvailability struct {
+	Rate24h       *float64                         `json:"rate24h"`
+	SampleCount   int                              `json:"sampleCount24h"`
+	Trend7d       []PublicModelAvailabilityDay     `json:"trend7d"`
+	RecentResults []bool                           `json:"recentResults"`
+	DataState     PublicModelAvailabilityDataState `json:"dataState"`
+	ComputedAt    time.Time                        `json:"computedAt"`
+	DataThrough   *time.Time                       `json:"dataThrough,omitempty"`
+}
+
+type PublicModelAvailabilityDataState string
+
+const (
+	PublicModelAvailabilityReady        PublicModelAvailabilityDataState = "ready"
+	PublicModelAvailabilityInsufficient PublicModelAvailabilityDataState = "insufficient"
+	PublicModelAvailabilityNoData       PublicModelAvailabilityDataState = "no_data"
+)
+
+type PublicModelAvailabilityDay struct {
+	Day         string                           `json:"day"`
+	Rate        *float64                         `json:"rate"`
+	SampleCount int                              `json:"sampleCount"`
+	DataState   PublicModelAvailabilityDataState `json:"dataState"`
+}
+
+// PublicChannelCatalog 公开的渠道目录信息（脱敏）
+type PublicChannelCatalog struct {
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	DisplayName string               `json:"displayName"`
+	SortOrder   int                  `json:"sortOrder"`
+	Models      []PublicChannelModel `json:"models"`
+}
+
+// PublicChannelModel 公开的渠道模型信息（脱敏）
+type PublicChannelModel struct {
+	ID               string                        `json:"id"`
+	ModelKey         string                        `json:"modelKey"`
+	ChannelLabel     string                        `json:"channelLabel"`
+	Tags             []model.ChannelModelTag       `json:"tags"`
+	Description      string                        `json:"description"`
+	DisplayName      string                        `json:"displayName"`
+	SortOrder        int                           `json:"sortOrder"`
+	Icon             string                        `json:"icon"`
+	Capability       string                        `json:"capability"`
+	Protocol         model.ChannelInterfaceType    `json:"protocol"`
+	CapabilityConfig map[string]any                `json:"capabilityConfig,omitempty"`
+	DefaultOptions   map[string]any                `json:"defaultOptions,omitempty"`
+	PriceTiers       []PublicChannelModelPriceTier `json:"priceTiers"`
+	PricingMode      string                        `json:"pricingMode"`
+	DisplayPrice     *int64                        `json:"displayPrice,omitempty"`
+	PriceLabel       string                        `json:"priceLabel"`
+	Available        bool                          `json:"available"`
+	Availability     *PublicModelAvailability      `json:"availability,omitempty"`
+}
+
+// PublicChannelModelPriceTier 公开的渠道模型价格档（脱敏）
+type PublicChannelModelPriceTier struct {
+	ID                           string            `json:"id"`
+	Selector                     map[string]string `json:"selector,omitempty"`
+	Resolution                   string            `json:"resolution"`
+	VideoSeconds                 int               `json:"videoSeconds"`
+	BillingMode                  string            `json:"billingMode"`
+	UnitPriceMicrocredits        int64             `json:"unitPriceMicrocredits"`
+	InputTokenPriceMicrocredits  int64             `json:"inputTokenPriceMicrocredits"`
+	OutputTokenPriceMicrocredits int64             `json:"outputTokenPriceMicrocredits"`
+	CachedTokenPriceMicrocredits int64             `json:"cachedTokenPriceMicrocredits"`
+}
+
+// ModelCatalog 的创作端目录始终来自系统渠道模型，不反查逻辑模型或路由。
+// 系统渠道目录只负责安全发布可解释的读模型；任务创建仍会用持久化能力与价格档再次强校验。
+func (s *Service) ModelCatalog(intent *ModelRequestIntent) (*ModelCatalogResponse, error) {
+	// 两个集合都初始化成非 nil 空切片：空目录要发 []，不能因为“没有模型”而丢掉字段。
+	response := &ModelCatalogResponse{Models: []PublicLogicalModel{}, Channels: []PublicChannelCatalog{}}
+	channels, err := s.publicSystemChannelCatalog(intent)
+	if err != nil {
+		return nil, err
+	}
+	response.Source = ModelCatalogSourceSystem
+	response.Channels = append(response.Channels, channels...)
+	if availability, availabilityErr := s.publicModelAvailability(response.Channels, time.Now().UTC()); availabilityErr != nil {
+		// Historical analytics are additive. A delayed or unavailable log store
+		// must not hide the existing catalog or change route selection behavior.
+		slog.Warn("public model availability metrics unavailable", "error", availabilityErr)
+	} else {
+		attachPublicModelAvailability(response.Channels, availability)
+	}
+	return response, nil
+}
+
+// publicSystemChannelCatalog 组装普通用户可见的系统渠道读模型，不暴露密钥、Base URL 等执行凭证。
+// 这是读展示路径：单个损坏模型被隔离并记录诊断；仓储查询失败仍整体返回错误，避免伪装成空目录。
+func (s *Service) publicSystemChannelCatalog(intent *ModelRequestIntent) ([]PublicChannelCatalog, error) {
+	channels, err := s.repo.SystemChannels(true)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]PublicChannelCatalog, 0, len(channels))
+	for _, channel := range channels {
+		if !channel.Enabled {
+			continue
+		}
+
+		channelModels, err := s.repo.ChannelModels(channel.ID, false)
+		if err != nil {
+			return nil, err
+		}
+
+		publicModels := make([]PublicChannelModel, 0, len(channelModels))
+		for _, cm := range channelModels {
+			if !cm.Enabled {
+				continue
+			}
+
+			// 目录是读路径：单个损坏模型应被隔离并记录诊断，不能拖垮其余可用模型；
+			// 同一记录进入任务创建写路径时会失败关闭，不会绕过能力合同。
+			if intent != nil {
+				matched, matchErr := s.channelModelMatchesIntent(&cm, intent)
+				if matchErr != nil {
+					if logging.Every("catalog-omit:"+cm.ID, 10*time.Minute) {
+						slog.Warn("system channel model omitted from catalog", "id", cm.ID, "reason", "invalid capability", "error", matchErr)
+					}
+					continue
+				}
+				if !matched {
+					continue
+				}
+			}
+
+			publicModel, sanitizeErr := s.sanitizeChannelModel(&cm)
+			if sanitizeErr != nil {
+				if logging.Every("catalog-omit:"+cm.ID, 10*time.Minute) {
+					slog.Warn("system channel model omitted from catalog", "id", cm.ID, "error", sanitizeErr)
+				}
+				continue
+			}
+			publicModels = append(publicModels, publicModel)
+		}
+
+		if len(publicModels) > 0 {
+			// 系统渠道的真实名称属于内部部署信息（供应商、中转站、内部命名等），
+			// 不得通过普通用户可访问的创作目录泄漏。前端只依赖 ID 做分组，名称留空后由客户端统一展示为“系统模型”。
+			result = append(result, PublicChannelCatalog{
+				ID:          channel.ID,
+				Name:        "",
+				DisplayName: "",
+				SortOrder:   channel.SortOrder,
+				Models:      publicModels,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+// sanitizeChannelModel 脱敏渠道模型，只保留用户可见且可执行的信息。
+// 能力 JSON 无效时返回错误，由目录聚合层执行“隔离 + 告警”，禁止发布缺失能力合同的模型。
+func (s *Service) sanitizeChannelModel(cm *model.ChannelModel) (PublicChannelModel, error) {
+	if cm == nil {
+		return PublicChannelModel{}, fmt.Errorf("渠道模型为空")
+	}
+	normalized, err := normalizedChannelModelCapability(cm, s.protocolRegistry())
+	if err != nil {
+		return PublicChannelModel{}, err
+	}
+	// 仓储层已预加载价格档；这里只发布当前启用且价格字段自洽的活动档位。
+	priceTiers := cm.PriceTiers
+
+	publicTiers := make([]PublicChannelModelPriceTier, 0, len(priceTiers))
+	for _, tier := range priceTiers {
+		if !tier.Enabled || !tier.PriceConfigured || !ValidatePriceTierPrice(&tier, cm.Capability, cm.Protocol) {
+			continue
+		}
+		if normalized != nil && normalized.Image != nil && normalized.Image.Parameters != nil {
+			if validateImageParameterPriceSelector(normalized.Image.Parameters, model.DecodeSKUSelector(tier.SelectorJSON)) != nil {
+				continue
+			}
+		}
+		publicTiers = append(publicTiers, PublicChannelModelPriceTier{
+			ID:                           tier.ID,
+			Selector:                     model.DecodeSKUSelector(tier.SelectorJSON),
+			Resolution:                   tier.Resolution,
+			VideoSeconds:                 tier.VideoSeconds,
+			BillingMode:                  tier.BillingMode,
+			UnitPriceMicrocredits:        tier.UnitPriceMicrocredits,
+			InputTokenPriceMicrocredits:  tier.InputTokenPriceMicrocredits,
+			OutputTokenPriceMicrocredits: tier.OutputTokenPriceMicrocredits,
+			CachedTokenPriceMicrocredits: tier.CachedTokenPriceMicrocredits,
+		})
+	}
+
+	// 展示价格和 Available 必须从同一批有效档位派生，不能回退旧标量价格制造“可用”假象。
+	pricingMode, displayPrice, priceLabel := computeChannelModelPriceDisplay(cm, publicTiers)
+
+	var capabilityConfig map[string]any
+	if normalized != nil {
+		capabilityConfig, err = modelCapabilityConfigToMap(normalized)
+		if err != nil {
+			return PublicChannelModel{}, fmt.Errorf("投影渠道模型能力配置失败：%w", err)
+		}
+	}
+	var defaultOptions map[string]any
+	if normalized != nil {
+		spec, specErr := CapabilitySpecFromModelCapabilityConfig(normalized, cm.Capability)
+		if specErr != nil {
+			return PublicChannelModel{}, fmt.Errorf("投影渠道模型默认参数失败：%w", specErr)
+		}
+		defaultOptions, err = channelModelDefaultOptions(*cm, spec, s.protocolRegistry())
+		if err != nil {
+			return PublicChannelModel{}, err
+		}
+	}
+
+	return PublicChannelModel{
+		ID:               cm.ID,
+		ModelKey:         cm.ModelKey,
+		ChannelLabel:     firstNonEmpty(cm.ChannelLabel, cm.ProviderModelKey, cm.ModelKey),
+		Tags:             cm.Tags,
+		Description:      cm.Description,
+		DisplayName:      cm.DisplayName,
+		SortOrder:        cm.SortOrder,
+		Icon:             cm.Icon,
+		Capability:       cm.Capability,
+		Protocol:         cm.Protocol,
+		CapabilityConfig: capabilityConfig,
+		DefaultOptions:   defaultOptions,
+		PriceTiers:       publicTiers,
+		PricingMode:      pricingMode,
+		DisplayPrice:     displayPrice,
+		PriceLabel:       priceLabel,
+		Available:        len(publicTiers) > 0,
+	}, nil
+}
+
+// computeChannelModelPriceDisplay 从已过滤的公开价格档生成展示信息。
+// 无有效档位时明确标记未配置；多档位不猜测用户最终规格。
+func computeChannelModelPriceDisplay(cm *model.ChannelModel, priceTiers []PublicChannelModelPriceTier) (string, *int64, string) {
+	if len(priceTiers) == 0 {
+		return "provider", nil, "未配置"
+	}
+
+	if len(priceTiers) == 1 {
+		tier := priceTiers[0]
+		price := getChannelTierDisplayPrice(tier)
+		if price > 0 {
+			return "provider", &price, ""
+		}
+	}
+
+	// 多个价格档，显示"按渠道规格计费"
+	return "provider", nil, "按渠道规格计费"
+}
+
+// getChannelTierDisplayPrice 获取渠道价格档的展示价格
+func getChannelTierDisplayPrice(tier PublicChannelModelPriceTier) int64 {
+	if tier.BillingMode == "fixed_request" || tier.BillingMode == "per_second" {
+		return tier.UnitPriceMicrocredits
+	}
+	if tier.OutputTokenPriceMicrocredits > 0 {
+		return tier.OutputTokenPriceMicrocredits
+	}
+	if tier.InputTokenPriceMicrocredits > 0 {
+		return tier.InputTokenPriceMicrocredits
+	}
+	return 0
+}
+
+// channelModelMatchesIntent 使用与任务 admission 相同的服务端能力合同过滤目录。
+// 音频能力当前没有可编辑的细分能力 JSON，只校验能力类型；其参数仍由 provider 专用校验负责。
+func (s *Service) channelModelMatchesIntent(cm *model.ChannelModel, intent *ModelRequestIntent) (bool, error) {
+	if cm == nil || intent == nil {
+		return true, nil
+	}
+	if normalizeCapability(intent.Capability) != "" && normalizeCapability(cm.Capability) != normalizeCapability(intent.Capability) {
+		return false, nil
+	}
+	if normalizeCapability(cm.Capability) == "audio" {
+		return true, nil
+	}
+	config, err := normalizedChannelModelCapability(cm, s.protocolRegistry())
+	if err != nil {
+		return false, err
+	}
+	spec, err := CapabilitySpecFromModelCapabilityConfig(config, cm.Capability)
+	if err != nil {
+		return false, err
+	}
+	match := MatchCapability(spec, *intent)
+	return match.Matched, nil
+}
+
+// modelCapabilityConfigToMap 将 ModelCapabilityConfig 转换为 map[string]any
+func modelCapabilityConfigToMap(config *ModelCapabilityConfig) (map[string]any, error) {
+	if config == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}

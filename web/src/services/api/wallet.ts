@@ -1,0 +1,385 @@
+import { http } from "@/services/api/request";
+import type { ModelTag } from "@/lib/model-tags";
+
+
+export type CreditAccount = {
+    userId: string;
+    availableMicrocredits: number;
+    reservedMicrocredits: number;
+    version: number;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type CreditLedgerEntry = {
+    id: string;
+    userId: string;
+    type: "redeem" | "payment_topup" | "admin_grant" | "consume" | "refund" | "admin_adjustment" | "signup_bonus" | "checkin_bonus" | "referral_commission";
+    amountMicrocredits: number;
+    availableAfterMicrocredits: number;
+    reservedAfterMicrocredits: number;
+    billingOrderId?: string;
+    paymentOrderId?: string;
+    model?: string;
+    channelId?: string;
+    scene?: string;
+    note?: string;
+    createdAt: string;
+};
+
+export type WalletSummary = {
+    account: CreditAccount;
+    entries: CreditLedgerEntry[];
+    total: number;
+    page: number;
+    pageSize: number;
+    policy: {
+        signupBonusMicrocredits: number;
+        checkinBonusMicrocredits: number;
+        checkedInToday: boolean;
+    };
+};
+
+export type CreditPolicy = {
+    signupBonusMicrocredits: number;
+    checkinBonusMicrocredits: number;
+    defaultMultiplierBasisPoints: number;
+    modelMultiplierBasisPoints: Record<string, number>;
+};
+
+export type ChannelModel = {
+    id: string;
+    channelId: string;
+    modelKey: string;
+    providerModelKey: string;
+    displayName: string;
+    channelLabel?: string;
+    tags?: ModelTag[];
+    description?: string;
+    sortOrder?: number;
+    icon: string;
+    capability: "text" | "image" | "video" | "audio" | "";
+    protocol?: import("@/lib/model-protocols").ModelProtocol;
+    billingMode: "fixed_request" | "per_second" | "token";
+    unitPriceMicrocredits: number;
+    inputTokenPriceMicrocredits: number;
+    outputTokenPriceMicrocredits: number;
+    cachedTokenPriceMicrocredits: number;
+    priceConfigured: boolean;
+    enabled: boolean;
+    priceVersion: number;
+    capabilityVersion?: number;
+    capabilityConfig?: import("@/lib/model-capabilities").ModelCapabilityConfig;
+    priceTiers: ChannelModelPriceTier[];
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type ChannelModelPriceTier = {
+    /** 仅管理员模型编辑接口返回，不能复制到用户模型目录。 */
+    costPricing?: CreditCostPricing;
+    id: string;
+    channelModelId: string;
+    selector: Record<string, string>;
+    selectorKey: string;
+    resolution: string;
+    videoSeconds: number;
+    providerModelKey: string;
+    billingMode: "fixed_request" | "per_second" | "token";
+    unitPriceMicrocredits: number;
+    inputTokenPriceMicrocredits: number;
+    outputTokenPriceMicrocredits: number;
+    cachedTokenPriceMicrocredits: number;
+    priceConfigured: boolean;
+    enabled: boolean;
+    priceVersion: number;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type CreditCostPricing = {
+    configured: boolean;
+    unitPriceMicrocredits: number;
+    inputTokenPriceMicrocredits: number;
+    outputTokenPriceMicrocredits: number;
+    cachedTokenPriceMicrocredits: number;
+};
+
+// 系统渠道模型的写入合同。标量价格只用于兼容旧管理请求；新的后台界面只提交 priceTiers。
+export type ChannelModelMutation = {
+    modelKey: string;
+    providerModelKey?: string;
+    displayName?: string;
+    channelLabel?: string;
+    tags?: ModelTag[];
+    description?: string;
+    icon?: string;
+    capability: ChannelModel["capability"];
+    protocol?: ChannelModel["protocol"];
+    enabled?: boolean;
+    capabilityConfig?: ChannelModel["capabilityConfig"];
+    priceTiers?: Array<Omit<ChannelModelPriceTier, "id" | "channelModelId" | "selectorKey" | "priceVersion" | "createdAt" | "updatedAt">>;
+    billingMode?: ChannelModel["billingMode"];
+    unitPriceMicrocredits?: number;
+    inputTokenPriceMicrocredits?: number;
+    outputTokenPriceMicrocredits?: number;
+    cachedTokenPriceMicrocredits?: number;
+    priceConfigured?: boolean;
+};
+
+export type LinuxDOSetting = {
+    enabled: boolean;
+    clientId: string;
+    clientSecret?: string;
+    hasClientSecret: boolean;
+    authorizationUrl: string;
+    tokenUrl: string;
+    userInfoUrl: string;
+    redirectUrl: string;
+    scopes: string[];
+    clientAuthMethod: "client_secret_post" | "client_secret_basic";
+    subjectField: string;
+    usernameField: string;
+    displayNameField: string;
+    emailField: string;
+    avatarField: string;
+    updatedAt?: string;
+};
+
+export type RegistrationSetting = {
+    enabled: boolean;
+    agreementTitle?: string;
+    agreementContent?: string;
+    updatedBy?: string;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type EmailSetting = {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    password?: string;
+    encryption: "starttls" | "tls" | "none";
+    fromEmail: string;
+    fromName: string;
+    fromNameInherited: boolean;
+    hasPassword: boolean;
+    registrationAllowedDomains: string[];
+    updatedBy?: string;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type RedeemBatch = {
+    id: string;
+    amountMicrocredits: number;
+    count: number;
+    note?: string;
+    createdBy: string;
+    expiresAt?: string;
+    createdAt: string;
+    availableCount: number;
+    redeemedCount: number;
+    disabledCount: number;
+    expiredCount: number;
+};
+
+export type AdminRedeemCode = {
+    id: string;
+    code?: string;
+    codeSuffix: string;
+    status: "unused" | "redeemed" | "disabled" | "expired";
+    redeemedBy?: string;
+    redeemedUsername?: string;
+    redeemedDisplayName?: string;
+    redeemedAt?: string;
+    redeemedIp?: string;
+    expiresAt?: string;
+    amountMicrocredits: number;
+};
+
+export type AdminRedeemCodePage = {
+    batch: RedeemBatch;
+    codes: AdminRedeemCode[];
+    plaintextAvailable: boolean;
+    total: number;
+    page: number;
+    pageSize: number;
+};
+
+export type BillingOrder = {
+    id: string;
+    userId: string;
+    taskId?: string;
+    channelId: string;
+    model: string;
+    capability: string;
+    scene: string;
+    billingMode: "fixed_request" | "per_second" | "token";
+    unitPriceMicrocredits: number;
+    multiplierBasisPoints: number;
+    quantity: number;
+    amountMicrocredits: number;
+    reservedAmountMicrocredits: number;
+    chargeLimitMicrocredits?: number;
+    actualAmountMicrocredits: number;
+    refundedAmountMicrocredits: number;
+    inputTokenPriceMicrocredits: number;
+    outputTokenPriceMicrocredits: number;
+    cachedTokenPriceMicrocredits: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    usageAvailable: boolean;
+    videoFormulaTokens?: number;
+    usageSource?: "provider" | "video_formula";
+    status: "reserved" | "running" | "settled" | "refunded" | "uncertain";
+    providerRequestId?: string;
+    error?: string;
+    resolvedBy?: string;
+    resolutionNote?: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export function getWallet(page = 1, pageSize = 30, type = "all") {
+    return http.get<WalletSummary>("/wallet", { params: { type, page, pageSize } });
+}
+
+export function redeemCredits(code: string) {
+    return http.post<{ account: CreditAccount }>("/wallet/redeem", { code });
+}
+
+export function checkinCredits() {
+    return http.post<{ account: CreditAccount; granted: boolean }>("/wallet/checkin");
+}
+
+export function getAdminCreditPolicy() {
+    return http.get<{ policy: CreditPolicy }>("/admin/settings/credits");
+}
+
+export function updateAdminCreditPolicy(policy: CreditPolicy) {
+    return http.patch<{ policy: CreditPolicy }>("/admin/settings/credits", policy);
+}
+
+export type BillingAutoRefundSetting = { enabled: boolean; updatedAt?: string };
+
+export function getAdminBillingAutoRefund() {
+    return http.get<{ setting: BillingAutoRefundSetting }>("/admin/settings/billing-auto-refund");
+}
+
+export function updateAdminBillingAutoRefund(enabled: boolean) {
+    return http.patch<{ setting: BillingAutoRefundSetting }>("/admin/settings/billing-auto-refund", { enabled });
+}
+
+export function getAdminLinuxDOSetting() {
+    return http.get<{ setting: LinuxDOSetting }>("/admin/settings/linuxdo");
+}
+
+export function updateAdminLinuxDOSetting(input: Partial<LinuxDOSetting>) {
+    return http.patch<{ setting: LinuxDOSetting }>("/admin/settings/linuxdo", input);
+}
+
+export function getAdminRegistrationSetting() {
+    return http.get<{ setting: RegistrationSetting }>("/admin/settings/registration");
+}
+
+export function updateAdminRegistrationSetting(input: { enabled: boolean; agreementTitle?: string; agreementContent?: string } | boolean) {
+    const payload = typeof input === "boolean" ? { enabled: input } : input;
+    return http.patch<{ setting: RegistrationSetting }>("/admin/settings/registration", payload);
+}
+
+export function getAdminEmailSetting() {
+    return http.get<{ setting: EmailSetting }>("/admin/settings/email");
+}
+
+export function updateAdminEmailSetting(input: Partial<EmailSetting>) {
+    return http.patch<{ setting: EmailSetting }>("/admin/settings/email", input);
+}
+
+export function listAdminChannelModels(channelId: string) {
+    return http.get<{ models: ChannelModel[] }>(`/admin/channels/${encodeURIComponent(channelId)}/models`);
+}
+
+// 管理员从上游读取模型目录；确认导入后才会写入渠道模型，价格和启用仍需人工确认。
+export function fetchAdminChannelModels(channelId: string) {
+    return http.post<{ models: string[] }>(`/admin/channels/${encodeURIComponent(channelId)}/models/fetch`);
+}
+
+export function importAdminChannelModels(channelId: string, models: string[]) {
+    return http.post<{ models: string[]; added: number }>(`/admin/channels/${encodeURIComponent(channelId)}/models/import`, { models });
+}
+
+export function testAdminChannelModel(channelId: string, input: Pick<ChannelModel, "modelKey" | "providerModelKey" | "capability" | "protocol"> & { capabilityConfig?: ChannelModel["capabilityConfig"] }) {
+    return http.post<{ durationMs: number }>(`/admin/channels/${encodeURIComponent(channelId)}/models/test`, input, { timeout: 10 * 60 * 1000 });
+}
+
+export function createAdminChannelModel(channelId: string, input: ChannelModelMutation) {
+    return http.post<{ model: ChannelModel }>(`/admin/channels/${encodeURIComponent(channelId)}/models`, input);
+}
+
+export function updateAdminChannelModel(channelId: string, id: string, input: ChannelModelMutation) {
+    return http.patch<{ model: ChannelModel }>(`/admin/channels/${encodeURIComponent(channelId)}/models/${encodeURIComponent(id)}`, input);
+}
+
+export function updateAdminChannelModelSort(channelId: string, id: string, sortOrder: number) {
+    return http.patch<{ updated: boolean }>(`/admin/channels/${encodeURIComponent(channelId)}/models/${encodeURIComponent(id)}/sort`, { sortOrder });
+}
+
+export function deleteAdminChannelModel(channelId: string, id: string) {
+    return http.delete<{ ok: boolean }>(`/admin/channels/${encodeURIComponent(channelId)}/models/${encodeURIComponent(id)}`);
+}
+
+export function deleteAdminChannelModels(channelId: string, modelIds: string[]) {
+    return http.post<{ deleted: number }>(`/admin/channels/${encodeURIComponent(channelId)}/models/batch-delete`, { modelIds });
+}
+
+export type ChannelModelRepriceInput = {
+    modelId: string;
+    priceVersion: number;
+    priceTiers: { id: string; priceVersion: number; prices: Partial<Record<"unitPriceMicrocredits" | "inputTokenPriceMicrocredits" | "outputTokenPriceMicrocredits" | "cachedTokenPriceMicrocredits", number>> }[];
+};
+
+export function repriceAdminChannelModels(channelId: string, models: ChannelModelRepriceInput[]) {
+    return http.post<{ updated: number }>(`/admin/channels/${encodeURIComponent(channelId)}/models/batch-reprice`, { models });
+}
+
+export type AdminFinanceListParams = { keyword?: string; status?: string; validity?: string; page?: number; pageSize?: number };
+
+export function listAdminRedeemBatches(params: AdminFinanceListParams = {}) {
+    return http.get<{ batches: RedeemBatch[]; total: number; page: number; pageSize: number }>("/admin/redeem-batches", { params });
+}
+
+export function createAdminRedeemBatch(input: { amountMicrocredits: number; count: number; note?: string; expiresAt?: string }) {
+    return http.post<{ batch: RedeemBatch; codes: string[] }>("/admin/redeem-batches", input, { timeout: 30_000 });
+}
+
+export function listAdminRedeemBatchCodes(batchId: string, params: { status?: string; page?: number; pageSize?: number } = {}) {
+    return http.get<AdminRedeemCodePage>(`/admin/redeem-batches/${encodeURIComponent(batchId)}/codes`, { params });
+}
+
+export function disableAdminRedeemBatch(batchId: string) {
+    return http.post<{ disabledCount: number }>(`/admin/redeem-batches/${encodeURIComponent(batchId)}/disable`);
+}
+
+export function disableAdminRedeemCode(batchId: string, codeId: string) {
+    return http.post<{ ok: boolean }>(`/admin/redeem-batches/${encodeURIComponent(batchId)}/codes/${encodeURIComponent(codeId)}/disable`);
+}
+
+export function adjustAdminUserCredits(userId: string, input: { amountMicrocredits: number; note: string }) {
+    return http.post<{ account: CreditAccount }>(`/admin/users/${encodeURIComponent(userId)}/credits/adjust`, input);
+}
+
+export function listAdminBillingOrders(params: AdminFinanceListParams = {}) {
+    return http.get<{ orders: BillingOrder[]; total: number; page: number; pageSize: number }>("/admin/billing-orders", { params });
+}
+
+export function resolveAdminBillingOrder(id: string, input: { action: "settle" | "refund"; note: string }) {
+    return http.post<{ order: BillingOrder }>(`/admin/billing-orders/${encodeURIComponent(id)}/resolve`, input);
+}
+
+export function resolveAdminBillingOrders(input: { ids: string[]; action: "settle" | "refund"; note: string }) {
+    return http.post<{ resolvedCount: number; failed: Array<{ id: string; message: string }> }>("/admin/billing-orders/batch-resolve", input);
+}

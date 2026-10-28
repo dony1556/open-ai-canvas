@@ -1,0 +1,688 @@
+import type { ModelChannel } from "@/stores/use-config-store";
+import type { BillingOrder, CreditLedgerEntry } from "@/services/api/wallet";
+import type { GenerationTask, TaskStatus } from "@/services/api/task-center";
+import type { CanvasDrawingEngineSetting } from "@/lib/canvas/canvas-drawing-engine";
+import type { FeatureAvailability } from "@/stores/use-user-store";
+import { http, apiBaseURL } from "@/services/api/request";
+import type { OSSConnectionTestInput, OSSConnectionTestResult, OSSProvider, S3Preset } from "@/lib/oss-settings";
+import type { VerificationPolicy } from "./verification";
+import type { AccountFileStorageUsage } from "@/services/api/resources";
+
+let authSessionRequest: Promise<AuthSessionPayload> | null = null;
+let authSessionCache: { payload: AuthSessionPayload; expiresAt: number } | null = null;
+
+export function invalidateAuthSessionCache() {
+    authSessionCache = null;
+}
+
+export type LocalUser = {
+    id: string;
+    username: string;
+    email?: string;
+    phone?: string;
+    emailVerifiedAt?: string;
+    phoneVerifiedAt?: string;
+    displayName: string;
+    avatarUrl?: string;
+    avatarMode?: "custom" | "default" | "";
+    avatarPreset?: string;
+    identityProvider?: string;
+    identityId?: string;
+    identityUsername?: string;
+    role: "admin" | "user";
+    status: "active" | "disabled";
+    isPromoter?: boolean;
+    lastLoginAt?: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type AdminUser = LocalUser & {
+    availableMicrocredits: number;
+    reservedMicrocredits: number;
+};
+
+export type AuthSessionPayload = {
+    user: LocalUser | null;
+    runtimeLimits?: RuntimeLimits;
+    drawingEngine?: CanvasDrawingEngineSetting;
+    features?: FeatureAvailability;
+    /** 当前账号能否进入推广中心；由后台推广设置和推广人标记共同决定。 */
+    referralAvailable?: boolean;
+};
+
+export type RuntimeLimits = {
+    activeTaskLimit: number;
+    resourceUploadMB: number;
+    storedFileGB: number;
+    recycleBinRetentionDays?: number;
+};
+
+export type ApiCallLog = {
+    id: string;
+    userId: string;
+    userDisplayName?: string;
+    userAccount?: string;
+    channelId: string;
+    channelName: string;
+    taskId?: string;
+    taskStatus?: TaskStatus;
+    mediaStage?: GenerationTask["mediaStage"];
+    billingOrderId?: string;
+    billingStatus?: BillingOrder["status"];
+    billingAmountMicrocredits: number;
+    billingAvailable: boolean;
+    source: string;
+    capability: "text" | "image" | "video" | "audio" | "";
+    operation?: string;
+    requestKind: "create" | "poll" | "download" | "upload" | "local_save" | "local_fallback" | "offload" | "register" | "repair" | "";
+    billable: boolean;
+    apiFormat: string;
+    method: string;
+    path: string;
+    model: string;
+    status: "succeeded" | "failed";
+    statusCode: number;
+    durationMs: number;
+    pollCount: number;
+    providerStatus?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+    usageAvailable: boolean;
+    mediaCount: number;
+    mediaPreviewUrl?: string;
+    mediaPreviewKind?: "image" | "video";
+    videoSeconds: number;
+    providerRequestId?: string;
+    estimatedCostMicros: number;
+    creditCostConfigured?: boolean;
+    creditCostMicrocredits?: number;
+    costAvailable: boolean;
+    currency?: string;
+    errorCode?: string;
+    error?: string;
+    concurrencyLimit: number;
+    upstreamUrl: string;
+    requestContentType?: string;
+    requestBody?: string;
+    responseBody?: string;
+    startedAt?: string;
+    createdAt: string;
+};
+
+export type AdminProviderTaskQueryResult = {
+    task: GenerationTask;
+    providerStatus: string;
+    recovered: boolean;
+    billingSettled: boolean;
+};
+
+export type AdminAuditEvent = {
+    id: string;
+    actorUserId: string;
+    action: string;
+    targetType: string;
+    targetId: string;
+    summary: string;
+    metadataJson?: string;
+    createdAt: string;
+};
+
+export type AdminUserDetail = {
+    user: LocalUser;
+    account: { userId: string; availableMicrocredits: number; reservedMicrocredits: number; version: number };
+    counts: { ledgerEntries: number; tasks: number; apiCalls: number; auditEvents: number; rechargeMicrocredits: number; checkinMicrocredits: number };
+    storageUsage: {
+        assetCount: number;
+        assetBytes: number;
+        canvasCount: number;
+        canvasBytes: number;
+        taskCount: number;
+        taskBytes: number;
+        apiCallCount: number;
+    };
+    storedFileBytes: number;
+    dailyUploadBytes: number;
+    quota: RuntimeResourcePolicy;
+    /** 包含已购扩容的有效容量与超额状态。 */
+    storageCapacity: AccountFileStorageUsage;
+};
+
+export type AdminUserTask = {
+    id: string;
+    type: string;
+    status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    stage: string;
+    progress: number;
+    model?: string;
+    providerRequestId?: string;
+    createdAt: string;
+};
+
+export type AnalyticsFilters = {
+    from?: string;
+    to?: string;
+    userId?: string;
+    model?: string;
+    channelId?: string;
+    capability?: string;
+};
+
+export type AdminReferenceData = {
+    users: Array<{ id: string; username: string; displayName: string }>;
+    channels: Array<{ id: string; name: string; enabled: boolean; models: string[]; modelDisplayNames?: string[] }>;
+};
+
+export type AnalyticsFinance = {
+    settledOrders: number;
+    costedOrders: number;
+    revenueMicrocredits: number;
+    costMicrocredits: number;
+    profitMicrocredits: number | null;
+    profitMargin: number | null;
+};
+
+export type AdminAnalytics = {
+    from: string;
+    to: string;
+    kpi: {
+        activeUsers: number;
+        dau: number;
+        wau: number;
+        mau: number;
+        generationTasks: number;
+        upstreamRequests: number;
+        successRate: number;
+        p95DurationMs: number;
+        currentQueuedTasks: number;
+        totalBalanceMicrocredits?: number;
+        totalConsumedMicrocredits?: number;
+        finance?: AnalyticsFinance | null;
+    };
+    trend: Array<{ day: string; tasks: number; requests: number; activeUsers: number; requestSuccessRate: number; consumedMicrocredits?: number }>;
+    models: Array<{
+        model: string;
+        capability: string;
+        tasks: number;
+        requests: number;
+        uniqueUsers: number;
+        taskSuccessRate: number;
+        requestSuccessRate: number;
+        p50DurationMs: number;
+        p95DurationMs: number;
+        inputTokens: number;
+        outputTokens: number;
+        cachedTokens: number;
+        usageAvailable: boolean;
+        mediaCount: number;
+        videoSeconds: number;
+        finance?: AnalyticsFinance | null;
+    }>;
+    users: Array<{ userId: string; name: string; activeDays: number; tasks: number; agentMessages: number; canvasDays: number; assets: number; resources: number; commonModel?: string }>;
+    failures: Array<{ type: string; model: string; count: number; lastError?: string; lastSeenAt: string }>;
+};
+
+export type ModelPricing = {
+    id: string;
+    channelId?: string;
+    model: string;
+    capability: "text" | "image" | "video" | "audio";
+    currency: string;
+    inputPerMillionMicros: number;
+    outputPerMillionMicros: number;
+    cachedPerMillionMicros: number;
+    perRequestMicros: number;
+    perMediaMicros: number;
+    perVideoSecondMicros: number;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type PromptTemplate = {
+    id: string;
+    operation: string;
+    name: string;
+    version: number;
+    content: string;
+    outputType: "json" | "text";
+    enabled: boolean;
+    createdBy?: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type PromptTemplateVariable = {
+    label: string;
+    placeholder: string;
+};
+
+export type PromptOperationDefinition = {
+    operation: string;
+    label: string;
+    category: string;
+    description: string;
+    outputType: "json" | "text";
+    schemaKey?: string;
+    variables: PromptTemplateVariable[];
+    outputContract: string;
+};
+
+export type UserPromptCustomization = {
+    id: string;
+    operation: string;
+    mode: "inherit" | "append" | "rewrite";
+    content: string;
+    baseTemplateId: string;
+    updatedAt: string;
+};
+
+export type UserPromptPreference = {
+    definition: PromptOperationDefinition;
+    template: PromptTemplate | null;
+    customization?: UserPromptCustomization;
+    outdated: boolean;
+};
+
+export type AdminOSSSetting = {
+    enabled: boolean;
+    provider: OSSProvider;
+    s3Preset: S3Preset;
+    region: string;
+    endpoint: string;
+    cdnBaseUrl: string;
+    cdnAuthMode: "" | "public" | "qiniu" | string;
+    requireCDN: boolean;
+    allowPrivateProxy: boolean;
+    bucket: string;
+    accessKeyId: string;
+    accessKeySecret?: string;
+    hasAccessKeySecret: boolean;
+    sessionToken?: string;
+    hasSessionToken: boolean;
+    pathStyle: boolean;
+    allowUserS3: boolean;
+    publicBaseUrl: string;
+    pathPrefix: string;
+    testedAt?: string;
+    testedDigest?: string;
+    historyCount?: number;
+    referencedResourceCount?: number;
+    updatedBy?: string;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type AdminArkPrivateAssetSetting = {
+    enabled: boolean;
+    region: string;
+    projectName: string;
+    accessKeyId: string;
+    accessKeySecret?: string;
+    hasAccessKeySecret: boolean;
+    updatedBy?: string;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type RuntimeResourcePolicy = {
+    resourceUploadMB: number;
+    generatedFileMB: number;
+    dailyUploadMB: number;
+    storedFileGB: number;
+    structuredDataMB: number;
+    taskDataGB: number;
+    assetCount: number;
+    canvasCount: number;
+    taskCount: number;
+    apiCallLogCount: number;
+    recycleBinRetentionDays?: number;
+};
+
+export type RuntimeStoragePolicy = {
+    transferTimeoutSeconds: number;
+    accessURLTTLSeconds: number;
+    providerAccessURLTTLSeconds: number;
+    nonSeekableBufferMB: number;
+    errorBodyKB: number;
+};
+
+export type RuntimeTaskPolicy = {
+    workerConcurrency: number;
+    channelConcurrency: number;
+    activeTaskLimit: number;
+    imageTimeoutMinutes: number;
+    textTimeoutMinutes: number;
+    audioTimeoutMinutes: number;
+    videoTimeoutMinutes: number;
+    storyboardTimeoutMinutes: number;
+    defaultTimeoutMinutes: number;
+    /** 画布 Agent 单步模型调用的输出上限（思考 + 正文 + 工具参数）；0 表示不限制。 */
+    agentStepMaxOutputTokens: number;
+    /** 画布 Agent 单步模型调用的秒级墙钟；0 表示沿用文本任务超时。 */
+    agentStepTimeoutSeconds: number;
+    /** 同时进行中的画布 Agent 轮次上限。审批等待不占用名额。 */
+    agentMaxSessions: number;
+};
+
+export type RuntimeRequestPolicy = {
+    taskCreatePerMinute: number;
+    resourceUploadPerMinute: number;
+    resourceImportPerMinute: number;
+    assetWritePerMinute: number;
+    canvasWritePerMinute: number;
+    registerPerHour: number;
+    emailCodePerHour: number;
+    loginIPPerTenMinutes: number;
+    loginAccountPerTenMinutes: number;
+    systemRelayPerMinute: number;
+    customRelayPerMinute: number;
+    customRelayConcurrency: number;
+    customRelayRequestMB: number;
+    customRelayResponseMB: number;
+    customRelayTimeoutMinutes: number;
+    systemRelayRequestMB: number;
+    systemRelayResponseMB: number;
+    channelCircuitFailureCount: number;
+    channelCircuitOpenSeconds: number;
+};
+
+export type RuntimePolicySetting = {
+    resource: RuntimeResourcePolicy;
+    storage: RuntimeStoragePolicy;
+    task: RuntimeTaskPolicy;
+    request: RuntimeRequestPolicy;
+    configured?: boolean;
+    updatedBy?: string;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export function getAuthSettings() {
+    return http.get<
+        VerificationPolicy & {
+            firstUser: boolean;
+            registrationEnabled: boolean;
+            linuxdoEnabled: boolean;
+            emailEnabled: boolean;
+            emailCodeRequired: boolean;
+            smsBindingAvailable: boolean;
+            emailBindingAvailable: boolean;
+            agreementTitle?: string;
+            agreementContent?: string;
+        }
+    >("/auth/settings");
+}
+
+export function linuxDOLoginURL(next: string, acceptedTerms?: boolean) {
+    const base = String(apiBaseURL).replace(/\/$/, "");
+    const termsQuery = acceptedTerms === undefined ? "" : `&acceptedTerms=${acceptedTerms ? "true" : "false"}`;
+    return `${base}/auth/linuxdo/start?next=${encodeURIComponent(next)}${termsQuery}`;
+}
+
+export function getAuthSession() {
+    const now = Date.now();
+    if (authSessionCache && authSessionCache.expiresAt > now) return Promise.resolve(authSessionCache.payload);
+    if (authSessionRequest) return authSessionRequest;
+    authSessionRequest = http
+        .get<AuthSessionPayload>("/auth/session")
+        .then((payload) => {
+            authSessionCache = { payload, expiresAt: Date.now() + 5_000 };
+            return payload;
+        })
+        .finally(() => {
+            authSessionRequest = null;
+        });
+    return authSessionRequest;
+}
+
+export function getSystemChannels() {
+    return http.get<{ channels: ModelChannel[] }>("/channels/system");
+}
+
+export function getFeatureAvailability() {
+    return http.get<{ features: FeatureAvailability }>("/features");
+}
+
+export function getAdminFeatureAvailability() {
+    return http.get<{ features: FeatureAvailability }>("/admin/settings/features");
+}
+
+export function updateAdminFeatureAvailability(
+    features: Partial<Pick<FeatureAvailability, "welcomeEnabled" | "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled" | "frontendModelsEnabled" | "pluginCenterEnabled" | "systemPluginsVisibleToUsers" | "inspirationSourcesVisible" | "imageWorkbenchEnabled" | "videoWorkbenchEnabled">>,
+) {
+    return http.patch<{ features: FeatureAvailability }>("/admin/settings/features", features);
+}
+
+export async function login(input: { username: string; password: string }) {
+    const result = await http.post<{ user: LocalUser }>("/auth/login", input);
+    // 登录会改变服务端会话身份，不能让登录前缓存的游客 session 污染后续恢复。
+    invalidateAuthSessionCache();
+    return result;
+}
+
+export function sendRegistrationEmailCode(email: string) {
+    return http.post<{ sent: boolean }>("/auth/email-code", { email });
+}
+
+export function sendPasswordResetEmailCode(email: string) {
+    return http.post<{ sent: boolean }>("/auth/password-reset-code", { email });
+}
+
+export function resetPassword(input: { email: string; emailCode: string; password: string }) {
+    return http.post<{ reset: boolean }>("/auth/password-reset", input);
+}
+
+export async function register(input: { username: string; email?: string; emailCode?: string; phone?: string; smsCode?: string; ticket?: string; displayName?: string; password: string; acceptedTerms: boolean; referralCode?: string }) {
+    const result = await http.post<{ user: LocalUser }>("/auth/register", input);
+    invalidateAuthSessionCache();
+    return result;
+}
+
+export async function logout() {
+    const result = await http.post<{ ok: boolean }>("/auth/logout");
+    invalidateAuthSessionCache();
+    return result;
+}
+
+export type AdminListParams = { keyword?: string; status?: string; role?: string; page?: number; pageSize?: number };
+
+export function listAdminUsers(params: AdminListParams = {}) {
+    return http.get<{ users: AdminUser[]; total: number; page: number; pageSize: number }>("/admin/users", { params });
+}
+
+export function createAdminUser(input: { username: string; displayName: string; email?: string; password: string; role: LocalUser["role"]; status: LocalUser["status"] }) {
+    return http.post<{ user: AdminUser }>("/admin/users", input);
+}
+
+export function getAdminReferences() {
+    return http.get<AdminReferenceData>("/admin/references");
+}
+
+export function getAdminUserDetail(id: string) {
+    return http.get<AdminUserDetail>(`/admin/users/${encodeURIComponent(id)}/detail`);
+}
+
+export function listAdminUserLedger(id: string, params: { page?: number; pageSize?: number; type?: string } = {}) {
+    return http.get<{ entries: CreditLedgerEntry[]; total: number; page: number; pageSize: number }>(`/admin/users/${encodeURIComponent(id)}/ledger`, { params });
+}
+
+export function listAdminUserTasks(id: string, params: { page?: number; pageSize?: number } = {}) {
+    return http.get<{ tasks: AdminUserTask[]; total: number; page: number; pageSize: number }>(`/admin/users/${encodeURIComponent(id)}/tasks`, { params });
+}
+
+export function listAdminUserAuditEvents(id: string, params: { page?: number; pageSize?: number } = {}) {
+    return http.get<{ events: AdminAuditEvent[]; total: number; page: number; pageSize: number }>(`/admin/users/${encodeURIComponent(id)}/audit-events`, { params });
+}
+
+export function updateAdminUser(id: string, input: Partial<Pick<LocalUser, "displayName" | "email" | "role" | "status" | "isPromoter">> & { password?: string }) {
+    return http.patch<{ user: LocalUser }>(`/admin/users/${encodeURIComponent(id)}`, input);
+}
+
+export function deleteAdminUser(id: string) {
+    return http.delete<{ ok: boolean }>(`/admin/users/${encodeURIComponent(id)}`);
+}
+
+export function bulkDisableAdminUsers(userIds: string[]) {
+    return http.post<{ users: LocalUser[]; disabledCount: number }>("/admin/users/bulk-disable", { userIds });
+}
+
+export function listAdminChannels(params: AdminListParams = {}) {
+    return http.get<{ channels: ModelChannel[]; total: number; page: number; pageSize: number }>("/admin/channels", { params });
+}
+
+export function createAdminChannel(input: Partial<ModelChannel> & { useGlobalConcurrency?: boolean }) {
+    return http.post<{ channel: ModelChannel }>("/admin/channels", input);
+}
+
+export function duplicateAdminChannel(id: string) {
+    return http.post<{ channel: ModelChannel }>(`/admin/channels/${encodeURIComponent(id)}/duplicate`);
+}
+
+/** 系统渠道导出文件：不含 API Key、Secret Key、自定义请求头和代理地址。 */
+export type SystemChannelExport = { format: string; version: number; exportedAt: string; channels: Array<{ name: string; models: unknown[] } & Record<string, unknown>> };
+export type SystemChannelImportResult = { createdChannels: string[]; updatedChannels: string[]; savedModels: number; errors: string[] };
+
+export function exportAdminChannels(ids?: string[]) {
+    return http.post<SystemChannelExport>("/admin/channels/export", { ids: ids || [] });
+}
+
+export function importAdminChannels(payload: SystemChannelExport) {
+    return http.post<SystemChannelImportResult>("/admin/channels/import", payload);
+}
+
+export function updateAdminChannel(id: string, input: Partial<ModelChannel> & { useGlobalConcurrency?: boolean }) {
+    return http.patch<{ channel: ModelChannel }>(`/admin/channels/${encodeURIComponent(id)}`, input);
+}
+
+export function deleteAdminChannel(id: string) {
+    return http.delete<{ ok: boolean }>(`/admin/channels/${encodeURIComponent(id)}`);
+}
+
+export function listAdminPromptTemplates() {
+    return http.get<{ templates: PromptTemplate[]; definitions: PromptOperationDefinition[] }>("/admin/prompt-templates");
+}
+
+export function createAdminPromptTemplate(input: Pick<PromptTemplate, "operation" | "name" | "content"> & { enabled?: boolean }) {
+    return http.post<{ template: PromptTemplate }>("/admin/prompt-templates", input);
+}
+
+export function updateAdminPromptTemplate(id: string, input: Pick<PromptTemplate, "operation" | "name" | "content"> & { enabled?: boolean }) {
+    return http.patch<{ template: PromptTemplate }>(`/admin/prompt-templates/${encodeURIComponent(id)}`, input);
+}
+
+export function deleteAdminPromptTemplate(id: string) {
+    return http.delete<{ ok: boolean }>(`/admin/prompt-templates/${encodeURIComponent(id)}`);
+}
+
+export function listUserPromptPreferences() {
+    return http.get<{ preferences: UserPromptPreference[] }>("/settings/prompt-templates");
+}
+
+export function updateUserPromptCustomization(operation: string, input: Pick<UserPromptCustomization, "mode" | "content">) {
+    return http.patch<{ customization: UserPromptCustomization }>(`/settings/prompt-templates/${encodeURIComponent(operation)}`, input);
+}
+
+export function resetUserPromptCustomization(operation: string) {
+    return http.delete<{ ok: boolean }>(`/settings/prompt-templates/${encodeURIComponent(operation)}`);
+}
+
+export function getAdminOSSSetting() {
+    return http.get<{ setting: AdminOSSSetting }>("/admin/settings/oss");
+}
+
+export function updateAdminOSSSetting(input: Partial<AdminOSSSetting>) {
+    return http.patch<{ setting: AdminOSSSetting }>("/admin/settings/oss", input);
+}
+
+export function testAdminOSSConnection(input: OSSConnectionTestInput) {
+    return http.post<OSSConnectionTestResult>("/admin/settings/oss/test", input);
+}
+
+export function getAdminArkPrivateAssetSetting() {
+    return http.get<{ setting: AdminArkPrivateAssetSetting }>("/admin/settings/ark-private-assets");
+}
+
+export function updateAdminArkPrivateAssetSetting(input: Partial<AdminArkPrivateAssetSetting>) {
+    return http.patch<{ setting: AdminArkPrivateAssetSetting }>("/admin/settings/ark-private-assets", input);
+}
+
+export function getAdminRuntimePolicySetting() {
+    return http.get<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy");
+}
+
+export function getAdminSelfUseRuntimePolicy() {
+    return http.get<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy/self-use");
+}
+
+export function updateAdminRuntimePolicySetting(input: Pick<RuntimePolicySetting, "resource" | "storage" | "task" | "request">) {
+    return http.put<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy", input);
+}
+
+export function resetAdminRuntimePolicySetting() {
+    return http.delete<{ setting: RuntimePolicySetting }>("/admin/settings/runtime-policy");
+}
+
+export function getAdminDrawingEngineSetting() {
+    return http.get<{ setting: CanvasDrawingEngineSetting }>("/admin/settings/drawing-engine");
+}
+
+export function updateAdminDrawingEngineSetting(input: Pick<CanvasDrawingEngineSetting, "defaultEngine" | "tldrawLicenseKey">) {
+    return http.patch<{ setting: CanvasDrawingEngineSetting }>("/admin/settings/drawing-engine", input);
+}
+
+export type AdminApiLogParams = AdminListParams & { recordType?: "request" | "download" | "all"; capability?: "text" | "image" | "video" | "audio" };
+
+export function listAdminApiLogs(params: AdminApiLogParams = {}) {
+    return http.get<{ logs: ApiCallLog[]; total: number; page: number; pageSize: number }>("/admin/api-logs", { params });
+}
+
+export function getAdminApiLog(id: string) {
+    return http.get<{ log: ApiCallLog }>(`/admin/api-logs/${encodeURIComponent(id)}`);
+}
+
+export function queryAdminApiLogTask(id: string, providerRequestId?: string) {
+    return http.post<AdminProviderTaskQueryResult>(`/admin/api-logs/${encodeURIComponent(id)}/query-task`, providerRequestId ? { providerRequestId } : undefined, { timeout: 120_000 });
+}
+
+export function recoverAdminApiLogVideoByURL(id: string, url: string, providerRequestId?: string) {
+    return http.post<AdminProviderTaskQueryResult>(`/admin/api-logs/${encodeURIComponent(id)}/recover-url`, { url, providerRequestId }, { timeout: 120_000 });
+}
+
+/** 重新保存“作品已生成但保存失败”的任务。订单已退款时必须选择补扣（charge）或免除（waive）。 */
+export function recoverAdminApiLogTaskMedia(id: string, refundedBilling?: "charge" | "waive") {
+    return http.post<{ task: GenerationTask }>(`/admin/api-logs/${encodeURIComponent(id)}/recover-media`, refundedBilling ? { refundedBilling } : undefined);
+}
+export function batchRecoverAdminApiLogs(ids: string[]) {
+    return http.post<{ items: Array<{ logId: string; recovered: boolean; providerStatus?: string; error?: string }>; success: number; failed: number; skipped: number }>("/admin/api-logs/recover-batch", { ids }, { timeout: 180_000 });
+}
+
+export async function exportAdminApiLogs(params: AdminApiLogParams & { ids?: string[] } = {}) {
+    const response = await http.raw<Blob>({ method: "get", url: "/admin/api-logs-export.csv", params: { ...params, ids: params.ids?.join(",") }, responseType: "blob" });
+    return response.data;
+}
+
+export function getAdminAnalytics(params: AnalyticsFilters) {
+    return http.get<AdminAnalytics>("/admin/analytics/overview", { params });
+}
+
+export async function exportAdminAnalytics(params: AnalyticsFilters) {
+    const response = await http.raw<Blob>({ method: "get", url: "/admin/analytics/export.csv", params, responseType: "blob" });
+    return response.data;
+}
+
+export function listAdminModelPricings() {
+    return http.get<{ pricings: ModelPricing[] }>("/admin/model-pricings");
+}
+
+export function createAdminModelPricing(input: Omit<ModelPricing, "id" | "createdAt" | "updatedAt">) {
+    return http.post<{ pricing: ModelPricing }>("/admin/model-pricings", input);
+}
+
+export function updateAdminModelPricing(id: string, input: Omit<ModelPricing, "id" | "createdAt" | "updatedAt">) {
+    return http.patch<{ pricing: ModelPricing }>(`/admin/model-pricings/${encodeURIComponent(id)}`, input);
+}
+
+export function deleteAdminModelPricing(id: string) {
+    return http.delete<{ ok: boolean }>(`/admin/model-pricings/${encodeURIComponent(id)}`);
+}
