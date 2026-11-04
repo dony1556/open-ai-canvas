@@ -45,6 +45,17 @@ func (s *Service) updateCloudAgentMediaApproval(repo *repository.Repository, run
 	if args.Mode != "image" && args.Mode != "video" {
 		return BadAuthRequest("仅图片或视频生成审批支持修改模型和规格")
 	}
+	if state.Approval.Prepared != nil {
+		// Validate the frozen dependencies before rebasing edited settings onto the current canvas.
+		args.Prepared = state.Approval.Prepared
+		args.DraftRunID = run.ID
+		_, doc, _, err := cloudAgentMediaDocument(repo, run.UserID, state.Request.CanvasID, args, state.TransientReferences)
+		if err != nil {
+			return err
+		}
+		args.SnapshotHash = cloudAgentMediaContentHash(doc)
+		args.Prepared = nil
+	}
 	args.LogicalModelID, args.ChannelID, args.ChannelModelKey = settings.LogicalModelID, settings.ChannelID, settings.ChannelModelKey
 	// These settings now come directly from the user, not the Agent's proposal.
 	args.ConfigurationChange = nil

@@ -43,7 +43,7 @@ test("image style and presets remain visible without the prompt template picker"
     expect(source).toContain("<CanvasNineGridPicker");
     expect(source).toContain('dense appearance="quiet"');
     expect(source).toContain('const showPromptTemplates = !simpleMode && mode !== "image"');
-    expect(source).toContain("{showPromptTemplates ? <CanvasPresetPicker");
+    expect(source).toMatch(/\{showPromptTemplates\s*\?\s*\(?\s*<CanvasPresetPicker/);
     expect(source).toContain("if (showPromptTemplates &&");
     expect(source).not.toContain('aria-label="生成工具"');
     expect(component("canvas-choose-image-style-picker.tsx")).toContain('resolvedLabel || "风格"');
@@ -93,7 +93,7 @@ test("editor rail and expanded panel share one restrained glass surface without 
     const page = readFileSync(new URL("../src/pages/canvas/project.tsx", import.meta.url), "utf8");
     const panel = component("canvas-workspace-panel.tsx");
     const styles = component("canvas-workspace-panel.css");
-    expect(page).toContain('<CanvasViewport');
+    expect(page).toContain("<CanvasViewport");
     expect(page).not.toContain("canvas-workspace-backdrop");
     expect(page).toContain("canvas-main-with-workspace");
     expect(styles).toContain(".canvas-main-with-workspace .canvas-editor-shell {\n    z-index: 0;");
@@ -120,6 +120,7 @@ test("editor rail and expanded panel share one restrained glass surface without 
     expect(styles).toContain("border-radius: var(--r-2xl)");
     expect(styles).not.toContain("border-radius: calc(var(--radius) * 3.5)");
     expect(page).toContain('workspaceOpen ? "canvas-workspace-expanded" : ""');
-    expect(styles).not.toContain("backdrop-filter: none");
+    // 短剧精修画布的无底板工具条（.is-bare，文件末尾）是唯一允许关闭模糊的规则；轨道与展开面板仍保持玻璃材质。
+    expect(styles.split(".canvas-floating-dock.is-bare")[0]).not.toContain("backdrop-filter: none");
     expect(styles).not.toContain("box-shadow: none");
 });

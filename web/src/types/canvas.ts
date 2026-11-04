@@ -270,9 +270,24 @@ export type CanvasMediaVersion = {
     generation?: CanvasMediaVersionGeneration;
 };
 
+/**
+ * 从短剧投送到精修画布的对象：设定参考图（cast）、剧情段（segment，挂在段框与段视频上）、成片（final）。
+ * 采用到短剧、侧栏定位和“短剧侧已更新”提示都依赖它；画布只保存绑定与投送时的快照，短剧数据以服务端为准。
+ */
+export type CanvasDramaRef = {
+    projectId: string;
+    kind: "cast" | "segment" | "final";
+    id: string;
+    episodeId?: string;
+    segmentIndex?: number;
+    /** 投送或最近一次同步时短剧侧的当前资源；短剧现状与它不同且与节点媒体也不同，说明短剧侧已更新。 */
+    baseResourceId?: string;
+};
+
 export type CanvasNodeMetadata = {
     /** Credential-free editable generation contract; submitted recipes live with tasks. */
     generationSpec?: GenerationSpec;
+    dramaRef?: CanvasDramaRef;
     /** Namespaced extension ownership for nodes contributed by a unified plugin. */
     pluginId?: string;
     pluginNodeId?: string;
@@ -343,6 +358,8 @@ export type CanvasNodeMetadata = {
     /** 当前画布节点覆盖的工作流动态字段，键为 source:* 或 field:nodeId:fieldName。 */
     workflowParameters?: Record<string, unknown>;
     size?: string;
+    /** 图片尺寸来源：user 为用户在图像设置中选择；default / reference 为模型默认值或参考图比例填入，图生图时继续跟随参考图。缺省且已有 size 按用户选择处理。 */
+    imageSizeSource?: "user" | "default" | "reference";
     quality?: string;
     imageResolution?: string;
     imageParameters?: string;

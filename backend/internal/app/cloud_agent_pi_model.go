@@ -109,7 +109,11 @@ func (s *Service) cloudAgentPiModel(ctx context.Context, userID, runID string, p
 	var correction []map[string]any
 	for attempt := 0; attempt <= cloudAgentModelStepRetries; attempt++ {
 		if attempt > 0 {
-			delay := time.Duration(1<<(attempt-1)) * time.Second
+			base := s.cloudAgentModelRetryBase
+			if base <= 0 {
+				base = time.Second
+			}
+			delay := time.Duration(1<<(attempt-1)) * base
 			log.Printf("[Agent] model step retry run=%s attempt=%d/%d after %s: %v", runID, attempt, cloudAgentModelStepRetries, delay, lastErr)
 			select {
 			case <-ctx.Done():
@@ -271,7 +275,7 @@ func (s *Service) runCloudAgentModelStep(ctx context.Context, userID, runID stri
 			cloudAgentApplyReadLoopNudge(&canonical, &state)
 		}
 		if !compactionSummary {
-			s.attachCloudAgentLessons(&canonical, userID, cloudAgentLessonTaskText(&state))
+			cloudAgentAttachRunContext(&canonical, &state)
 			budget := s.cloudAgentContextBudgetForRequest(state.Request)
 			if err := fitCloudAgentModelContext(&canonical, budget.InputBudgetTokens); err != nil {
 				return nil, false, err
@@ -521,6 +525,10 @@ func (s *Service) cloudAgentModelTaskRetryable(taskID string) bool {
 		return false
 	}
 	if cloudAgentEmptyModelOutput(task) || cloudAgentStepTimedOut(task) {
+		return true
+	}
+	// 域名解析失败发生在连接建立前，请求未送达上游，多为 DNS 抖动，按网络错误重试。
+	if diagnostic := taskExecutionDiagnostic(task); diagnostic != nil && diagnostic.Code == string(ReasonUpstreamDNSFailed) {
 		return true
 	}
 	call, err := s.repo.LatestAPICallForTask(taskID)

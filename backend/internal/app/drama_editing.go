@@ -58,6 +58,107 @@ func (s *Service) AddDramaEpisode(userID, projectID string, req AddDramaEpisodeR
 	return s.DramaEpisodeDetail(userID, projectID, episode.ID)
 }
 
+// DramaChapterOutline 返回原著目录：全部章节（含导入时未选中的预留章节）的标题、字数、是否已加入制作，以及使用它的第一集。
+func (s *Service) DramaChapterOutline(userID, projectID string) ([]DramaChapterRef, error) {
+	project, _, err := s.dramaForUser(userID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	units, err := s.repo.DramaChapterOutline(project.ID)
+	if err != nil {
+		return nil, err
+	}
+	episodes, err := s.repo.DramaEpisodes(project.ID)
+	if err != nil {
+		return nil, err
+	}
+	episodeByChapter := map[string]int{}
+	for _, episode := range episodes {
+		for _, id := range decodeStringList(episode.ChapterIDsJSON) {
+			if _, exists := episodeByChapter[id]; !exists {
+				episodeByChapter[id] = episode.Number
+			}
+		}
+	}
+	result := make([]DramaChapterRef, 0, len(units))
+	for _, unit := range units {
+		result = append(result, DramaChapterRef{ID: unit.ID, Title: unit.Title, Position: unit.Position, WordCount: unit.WordCount, Reserved: unit.Status == model.ProjectUnitStatusReserved, EpisodeNumber: episodeByChapter[unit.ID]})
+	}
+	return result, nil
+}
+
+// ProduceDramaChapters 把预留的原著章节加入制作：按章节顺序建成新的集追加在末尾，调度循环随后为它们写剧本；
+// 这些章节里新出现的角色、道具与场景在写剧本时即时建档。暂停中的制作保持暂停。
+func (s *Service) ProduceDramaChapters(userID, projectID string, req ProduceDramaChaptersRequest) (ProduceDramaChaptersResult, error) {
+	project, productionRow, err := s.dramaForUser(userID, projectID)
+	if err != nil {
+		return ProduceDramaChaptersResult{}, err
+	}
+	if len(req.ChapterIDs) == 0 || len(req.ChapterIDs) > dramaMaxChapters {
+		return ProduceDramaChaptersResult{}, BadAuthRequest("请选择要加入制作的章节")
+	}
+	if req.ChaptersPerEpisode < 0 || req.ChaptersPerEpisode > dramaMaxChaptersPerEpisode {
+		return ProduceDramaChaptersResult{}, BadAuthRequest(fmt.Sprintf("每集章数需为 1 到 %d", dramaMaxChaptersPerEpisode))
+	}
+	wanted := make(map[string]bool, len(req.ChapterIDs))
+	for _, id := range req.ChapterIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			wanted[id] = true
+		}
+	}
+	units, err := s.repo.DramaChapterOutline(project.ID)
+	if err != nil {
+		return ProduceDramaChaptersResult{}, err
+	}
+	chosen := make([]model.ProjectUnit, 0, len(wanted))
+	for _, unit := range units {
+		if !wanted[unit.ID] {
+			continue
+		}
+		if unit.Status != model.ProjectUnitStatusReserved {
+			return ProduceDramaChaptersResult{}, BadAuthRequest(fmt.Sprintf("“%s”已在制作中", unit.Title))
+		}
+		// 与导入时同一上限：剧本提示词每章最多读取这么多字，超出会丢台词。
+		if unit.WordCount > production.ScriptSourceChapterRunes {
+			return ProduceDramaChaptersResult{}, BadAuthRequest(fmt.Sprintf("第 %d 章原文 %d 字，单章不超过 %d 字，请先修改原文拆开", unit.Position+1, unit.WordCount, production.ScriptSourceChapterRunes))
+		}
+		chosen = append(chosen, unit)
+	}
+	if len(chosen) == 0 || len(chosen) != len(wanted) {
+		return ProduceDramaChaptersResult{}, BadAuthRequest("选择的章节不存在，请刷新后重试")
+	}
+	perEpisode := req.ChaptersPerEpisode
+	if perEpisode == 0 {
+		perEpisode = max(1, parseDramaSettings(productionRow.SettingsJSON).ChaptersPerEpisode)
+	}
+	// 集号在事务内按现有最大集号分配。
+	episodes, err := groupDramaChapterEpisodes(project.ID, 0, chosen, perEpisode, production.NormalizeSourceFormat(project.SourceType), time.Now())
+	if err != nil {
+		return ProduceDramaChaptersResult{}, err
+	}
+	ids := make([]string, 0, len(chosen))
+	for _, unit := range chosen {
+		ids = append(ids, unit.ID)
+	}
+	if err := s.repo.ProduceDramaChapters(project.ID, ids, episodes); err != nil {
+		if errors.Is(err, repository.ErrDramaPlanPending) {
+			return ProduceDramaChaptersResult{}, BadAuthRequest("前面的章节还在分集规划，完成后再加入新的章节")
+		}
+		if errors.Is(err, repository.ErrDramaChaptersChanged) {
+			return ProduceDramaChaptersResult{}, BadAuthRequest("章节状态已变化，请刷新后重试")
+		}
+		return ProduceDramaChaptersResult{}, err
+	}
+	if err := s.reopenDrama(productionRow); err != nil {
+		return ProduceDramaChaptersResult{}, err
+	}
+	result := ProduceDramaChaptersResult{EpisodeIDs: make([]string, 0, len(episodes))}
+	for _, episode := range episodes {
+		result.EpisodeIDs = append(result.EpisodeIDs, episode.ID)
+	}
+	return result, nil
+}
+
 // UpdateDramaChapter 修改原文；已写好的剧本保持不变，用户确认后点重新改编才会按新原文重写。
 func (s *Service) UpdateDramaChapter(userID, projectID, chapterID string, req UpdateDramaChapterRequest) (model.ProjectUnit, error) {
 	project, _, err := s.dramaForUser(userID, projectID)
@@ -230,13 +331,28 @@ func (s *Service) SetDramaCastImage(userID, projectID, castID string, req SetDra
 	if resource.Status != model.ResourceStatusReady || !strings.HasPrefix(resource.MimeType, "image/") {
 		return nil, BadAuthRequest("请上传已完成的图片文件")
 	}
+	source := strings.TrimSpace(req.Source)
+	if source != "" && source != "upload" && source != "canvas" {
+		return nil, BadAuthRequest("参考图来源无效")
+	}
+	if cast.ImageResourceID == resource.ID && cast.ImageStatus == model.DramaMediaReady && cast.Locked {
+		// 重复采用同一张图（双击、Agent 重放）不再新增版本，也不再让剧情段过期。
+		return map[string]any{"cast": cast, "affectedSegments": 0, "unchanged": true}, nil
+	}
 	// 排队中的生图不再需要；生成中的结果回写时槽位已是 ready，只会进版本记录，不会覆盖上传的图。
 	if err := s.repo.CancelQueuedDramaJobs(project.ID, func(db *gorm.DB) *gorm.DB {
 		return db.Where("cast_id = ? AND kind = ?", cast.ID, model.DramaJobCastImage)
 	}); err != nil {
 		return nil, err
 	}
-	if err := s.repo.CreateDramaTake(&model.DramaTake{ID: newID(), ProjectID: project.ID, OwnerID: cast.ID, Kind: "cast", ResourceID: resource.ID, Prompt: "用户上传", CreatedAt: time.Now()}); err != nil {
+	take := &model.DramaTake{ID: newID(), ProjectID: project.ID, OwnerID: cast.ID, Kind: "cast", ResourceID: resource.ID, Prompt: dramaTakeUploadPrompt, CreatedAt: time.Now()}
+	if source == "canvas" {
+		take.Prompt = dramaTakeCanvasPrompt
+		if task := s.dramaCanvasSourceTask(userID, req.TaskID, resource.ID); task != nil {
+			take.TaskID, take.Prompt = task.ID, truncateRunes(firstNonEmpty(strings.TrimSpace(task.Prompt), dramaTakeCanvasPrompt), 2000)
+		}
+	}
+	if err := s.repo.CreateDramaTake(take); err != nil {
 		return nil, err
 	}
 	if err := s.repo.UpdateDramaCastFields(cast.ID, map[string]any{"image_resource_id": resource.ID, "image_status": model.DramaMediaReady, "image_version": gorm.Expr("image_version + 1"), "locked": true}); err != nil {

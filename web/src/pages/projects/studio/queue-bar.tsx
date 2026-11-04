@@ -23,7 +23,10 @@ export function QueueBar({ projectId, summary, retrying, onRetry, onJump }: { pr
         [filter, jobsQuery.data],
     );
     const budget = production.budgetMicrocredits;
-    const usage = budget ? Math.min(1, production.spentMicrocredits / budget) : 0;
+    const held = production.heldMicrocredits || 0;
+    // 预算进度与后端预算判断同一口径：已扣费加未结算订单的冻结额。
+    const committed = production.spentMicrocredits + held;
+    const usage = budget ? Math.min(1, committed / budget) : 0;
     return (
         <div className="drama-queue">
             <div className="drama-queue-bar">
@@ -50,10 +53,11 @@ export function QueueBar({ projectId, summary, retrying, onRetry, onJump }: { pr
                 <span className="drama-queue-budget">
                     {budget ? (
                         <span className="drama-queue-meter">
-                            <span className={usage >= 0.9 ? "is-warn" : ""} style={{ width: `${Math.max(usage * 100, production.spentMicrocredits ? 3 : 0)}%` }} />
+                            <span className={usage >= 0.9 ? "is-warn" : ""} style={{ width: `${Math.max(usage * 100, committed ? 3 : 0)}%` }} />
                         </span>
                     ) : null}
                     已用 <b>{formatCredits(production.spentMicrocredits)}</b>
+                    {held > 0 ? <> · 冻结 {formatCredits(held)}</> : null}
                     {budget ? <> / {formatCredits(budget)} 积分</> : " 积分 · 不限预算"}
                 </span>
                 <button type="button" className="drama-queue-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -82,8 +86,9 @@ export function QueueBar({ projectId, summary, retrying, onRetry, onJump }: { pr
                             <button key={job.id} type="button" role="listitem" className={`drama-job is-${job.status}`} onClick={() => setDetailJob(job)}>
                                 <JobStatusIcon status={job.status} />
                                 <span className="drama-job-kind">{JOB_KIND_LABEL[job.kind]}</span>
-                                <span className="drama-job-label" title={job.label}>
+                                <span className="drama-job-label" title={job.providerStage ? `${job.label} · ${job.providerStage}` : job.label}>
                                     {job.label}
+                                    {job.status === "running" && job.providerStage ? <span className="text-foreground/50"> · {job.providerStage}</span> : null}
                                 </span>
                                 <span className="drama-job-error" title={job.error}>
                                     {job.error && (job.status === "failed" || job.status === "queued") ? job.error : ""}

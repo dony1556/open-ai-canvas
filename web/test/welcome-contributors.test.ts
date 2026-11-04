@@ -6,24 +6,26 @@ import { parseContributors } from "../src/pages/welcome/contributors-parse";
 
 const identityAvatar = (path: string) => path;
 
-test("welcome contributors parse the README HTML table", () => {
+test("OCTV-AIGC README remains concise without a contributors section", () => {
     const readme = readFileSync(resolve(import.meta.dir, "../../README.md"), "utf8");
-    const people = parseContributors(readme, identityAvatar);
+    expect(readme).toContain("OCTV-AIGC");
+    expect(readme).toContain("## 核心能力");
+    expect(readme).toContain("## 快速开始");
+    expect(parseContributors(readme, identityAvatar)).toEqual([]);
+});
 
-    expect(people.length).toBeGreaterThanOrEqual(20);
-    expect(people[0]).toMatchObject({
-        name: "ddCat",
-        avatar: "assets/user-ddcat.jpg",
-        email: "ddcat666@126.com",
-        wechat: "ddcat0829",
-        isFounder: true,
-    });
-    expect(people[0]?.signature).toContain("没有任何黑魔法");
-    expect(people.some((person) => person.name === "爱笑的毛毛虫")).toBe(true);
-    expect(people.some((person) => person.name === "morrow" && person.email === "3201190041@qq.com" && person.signature === "最难不过坚持")).toBe(true);
-    expect(people.some((person) => person.name === "Wyatt_K" && person.avatar === "assets/user-Wyatt_K.png" && person.signature === "千里之行，始于足下。")).toBe(true);
-    expect(people.some((person) => person.name === "亿媒网老宋" && person.avatar === "assets/user-song.jpg" && person.email === "61731514@qq.com" && person.signature === "全国10W+媒体、自媒体，助力企业品牌传播")).toBe(true);
-    expect(people.filter((person) => person.isFounder)).toHaveLength(1);
+test("welcome contributors parse HTML tables independently of README content", () => {
+    const markdown = `## 贡献者与团队
+<table><tr>
+<td><img src="assets/user-example.jpg" alt="Example"><strong>Example<br>项目发起者 · 微信：example-id</strong><a href="mailto:founder@example.com">邮箱</a><em>把故事搬上银幕</em></td>
+<td><img src="assets/user-ken.jpg" alt="ken"><strong>ken</strong><a href="mailto:ken@example.com">邮箱</a><em>走自己的路</em></td>
+</tr></table>
+## 下一章
+`;
+    expect(parseContributors(markdown, identityAvatar)).toEqual([
+        { name: "Example", avatar: "assets/user-example.jpg", email: "founder@example.com", wechat: "example-id", signature: "把故事搬上银幕", isFounder: true },
+        { name: "ken", avatar: "assets/user-ken.jpg", email: "ken@example.com", wechat: undefined, signature: "走自己的路", isFounder: false },
+    ]);
 });
 
 test("welcome contributors still parse markdown pipe tables", () => {
@@ -31,18 +33,18 @@ test("welcome contributors still parse markdown pipe tables", () => {
 
 | 头像 | 昵称 | 邮箱 | 签名 |
 | --- | --- | --- | --- |
-| <img src="assets/user-ddcat.jpg" alt="ddCat"> | ddCat<br>项目发起者 · 微信：ddcat0829 | founder@example.com | 把故事搬上银幕 |
+| <img src="assets/user-example.jpg" alt="Example"> | Example<br>项目发起者 · 微信：example-id | founder@example.com | 把故事搬上银幕 |
 | <img src="assets/user-ken.jpg" alt="ken"> | ken | ken@example.com | 走自己的路 |
 
 ## 下一章
 `;
     expect(parseContributors(markdown, identityAvatar)).toEqual([
         {
-            name: "ddCat",
-            avatar: "assets/user-ddcat.jpg",
+            name: "Example",
+            avatar: "assets/user-example.jpg",
             signature: "把故事搬上银幕",
             email: "founder@example.com",
-            wechat: "ddcat0829",
+            wechat: "example-id",
             isFounder: true,
         },
         {

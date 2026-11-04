@@ -43,47 +43,87 @@ func (s *Service) CreateDrama(userID string, req CreateDramaRequest) (DramaSumma
 		// 新作品默认先只跑文本：先看剧情、分镜与资产，确认后再花钱生图。
 		req.Settings.MediaMode = DramaMediaManual
 	}
+	format := production.NormalizeSourceFormat(req.SourceFormat)
+	// 分集方式随设置保存；请求顶层的 episodeMode 只在设置里没写时使用。
+	if req.Settings.EpisodeMode == "" {
+		req.Settings.EpisodeMode = firstNonEmpty(req.EpisodeMode, DramaEpisodeModeAuto)
+	}
+	// 剧本与分镜本身就是按集写好的，总是每章一集。
+	if format != production.SourceNovel {
+		req.Settings.EpisodeMode, req.Settings.ChaptersPerEpisode = DramaEpisodeModeChapter, 1
+	}
 	settings := req.Settings.normalized()
+	if !production.ValidAspectRatio(settings.AspectRatio) {
+		return DramaSummary{}, BadAuthRequest("不支持的画幅：" + settings.AspectRatio)
+	}
 	if problem := production.ValidateAssetPrompts(settings.Assets); problem != "" {
 		return DramaSummary{}, BadAuthRequest(problem)
 	}
-	if _, err := s.dramaWritingSkill(userID, settings.PromptSkill); err != nil {
+	if err := s.validateDramaSkills(userID, settings); err != nil {
 		return DramaSummary{}, err
 	}
-	models, err := s.resolveDramaModels(settings.Models)
+	if err := s.validateDramaModelOverrides(userID, settings.Models); err != nil {
+		return DramaSummary{}, err
+	}
+	models, err := s.resolveDramaModels(userID, settings)
 	if err != nil {
 		return DramaSummary{}, err
 	}
 	settings.Models = models
+	if err := s.validateDramaImageSettings(models, settings.Assets); err != nil {
+		return DramaSummary{}, err
+	}
+	if err := s.validateDramaVideoSettings(settings); err != nil {
+		return DramaSummary{}, err
+	}
 	if req.Start {
 		if missing := missingDramaCapabilities(models); len(missing) > 0 {
 			return DramaSummary{}, BadAuthRequest("还没有可用的" + strings.Join(missing, "、") + "模型，请联系管理员开通后再开始制作")
 		}
 	}
-	format := production.NormalizeSourceFormat(req.SourceFormat)
-	// 剧本与分镜本身就是按集写好的，总是每章一集；小说可选择逐集（每章一集）或交给模型分集。
-	perChapter := format != production.SourceNovel || req.EpisodeMode == DramaEpisodeModeChapter
+	selected, err := dramaSelectedChapters(req.SelectedChapters, len(req.Chapters))
+	if err != nil {
+		return DramaSummary{}, err
+	}
+	// 按章分集时建档即写好各集；交给模型分集时由调度循环分批规划。
+	perChapter := settings.EpisodeMode == DramaEpisodeModeChapter
 	now := time.Now()
 	project := model.Project{ID: newID(), UserID: userID, Name: name, Type: "short-drama", AspectRatio: settings.AspectRatio, SourceType: format, Status: model.ProjectStatusActive, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	chapters := make([]model.ProjectUnit, 0, len(req.Chapters))
-	totalRunes := 0
+	produced := make([]model.ProjectUnit, 0, len(req.Chapters))
+	totalRunes, producedRunes := 0, 0
 	for index, input := range req.Chapters {
 		text := strings.TrimSpace(strings.ReplaceAll(input.Text, "\r\n", "\n"))
 		runes := utf8.RuneCountInString(text)
 		if runes > dramaMaxChapterRunes {
 			return DramaSummary{}, BadAuthRequest("单章不能超过 6 万字，请检查章节拆分")
 		}
-		if perChapter && runes > production.ScriptSourceChapterRunes {
-			return DramaSummary{}, BadAuthRequest(fmt.Sprintf("第 %d 集原文 %d 字，逐集制作时单集不超过 %d 字，请拆成多集", index+1, runes, production.ScriptSourceChapterRunes))
+		// 剧本提示词每章最多读取这么多字，超出会被截断而丢台词，所以无论哪种分集方式都直接拒绝。
+		// 预留章节暂不改编，加入制作时再检查。
+		if selected[index] && runes > production.ScriptSourceChapterRunes {
+			label := "章"
+			if perChapter && settings.ChaptersPerEpisode == 1 {
+				label = "集"
+			}
+			return DramaSummary{}, BadAuthRequest(fmt.Sprintf("第 %d %s原文 %d 字，单章不超过 %d 字，请在章节标题处拆开", index+1, label, runes, production.ScriptSourceChapterRunes))
 		}
 		totalRunes += runes
 		title := strings.TrimSpace(input.Title)
 		if title == "" {
 			title = "第 " + itoa(index+1) + " 章"
 		}
-		chapters = append(chapters, model.ProjectUnit{ID: newID(), ProjectID: project.ID, Kind: model.ProjectUnitKindChapter, Title: truncateRunes(title, 200), SourceText: text, WordCount: runes, Status: model.ProjectUnitStatusReady, Position: index, CreatedAt: now, UpdatedAt: now})
+		status := model.ProjectUnitStatusReserved
+		if selected[index] {
+			status = model.ProjectUnitStatusReady
+		}
+		chapter := model.ProjectUnit{ID: newID(), ProjectID: project.ID, Kind: model.ProjectUnitKindChapter, Title: truncateRunes(title, 200), SourceText: text, WordCount: runes, Status: status, Position: index, CreatedAt: now, UpdatedAt: now}
+		chapters = append(chapters, chapter)
+		if selected[index] {
+			produced = append(produced, chapter)
+			producedRunes += runes
+		}
 	}
-	if totalRunes == 0 {
+	if totalRunes == 0 || producedRunes == 0 {
 		return DramaSummary{}, BadAuthRequest("原文为空")
 	}
 	if totalRunes > dramaMaxNovelRunes {
@@ -96,10 +136,11 @@ func (s *Service) CreateDrama(userID string, req CreateDramaRequest) (DramaSumma
 	productionRow := model.DramaProduction{ProjectID: project.ID, UserID: userID, Status: status, Stage: model.DramaStageBible, SettingsJSON: encodeDramaSettings(settings), BudgetMicrocredits: req.BudgetMicrocredits, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	var episodes []model.DramaEpisode
 	if perChapter {
-		// 每章直接成为一集，分集规划视为已完成；建档后各集按窗口依次写剧本。
-		productionRow.PlanCursor, productionRow.PlanDone = len(chapters), true
-		for index, chapter := range chapters {
-			episodes = append(episodes, newDramaChapterEpisode(project.ID, index+1, chapter, format, now))
+		// 按章分组直接建集，分集规划视为已完成；建档后各集按窗口依次写剧本。游标只数加入制作的章节。
+		productionRow.PlanCursor, productionRow.PlanDone = len(produced), true
+		episodes, err = groupDramaChapterEpisodes(project.ID, 1, produced, settings.ChaptersPerEpisode, format, now)
+		if err != nil {
+			return DramaSummary{}, err
 		}
 	}
 	if err := s.repo.CreateDramaProject(&project, chapters, &productionRow, episodes...); err != nil {
@@ -117,6 +158,55 @@ func (s *Service) CreateDrama(userID string, req CreateDramaRequest) (DramaSumma
 // newDramaChapterEpisode 把一章原文直接建成一集；梗概、钩子和悬念留空，由剧本阶段按原文补写。
 func newDramaChapterEpisode(projectID string, number int, chapter model.ProjectUnit, format string, now time.Time) model.DramaEpisode {
 	return model.DramaEpisode{ID: newID(), ProjectID: projectID, Number: number, Title: truncateRunes(chapter.Title, 60), ChapterIDsJSON: encodeStringList([]string{chapter.ID}), SourceFormat: format, Stage: model.DramaEpisodeQueued, Revision: 1, CreatedAt: now, UpdatedAt: now}
+}
+
+// dramaSelectedChapters 校验导入时先加入制作的章节下标；为空表示全部章节。
+func dramaSelectedChapters(indexes []int, total int) (map[int]bool, error) {
+	selected := make(map[int]bool, total)
+	if len(indexes) == 0 {
+		for index := 0; index < total; index++ {
+			selected[index] = true
+		}
+		return selected, nil
+	}
+	for _, index := range indexes {
+		if index < 0 || index >= total {
+			return nil, BadAuthRequest("选择的章节不存在，请重新选择")
+		}
+		selected[index] = true
+	}
+	return selected, nil
+}
+
+// groupDramaChapterEpisodes 按章节顺序每 perEpisode 章合成一集，编号从 startNumber 起；不相邻的章节（中间有未加入制作的章）
+// 不合进同一集。合并后单集原文超过上限时拒绝，提示减少每集章数。章节只需 ID、标题、位置与字数。
+func groupDramaChapterEpisodes(projectID string, startNumber int, chapters []model.ProjectUnit, perEpisode int, format string, now time.Time) ([]model.DramaEpisode, error) {
+	perEpisode = max(1, min(dramaMaxChaptersPerEpisode, perEpisode))
+	episodes := make([]model.DramaEpisode, 0, (len(chapters)+perEpisode-1)/perEpisode)
+	for start := 0; start < len(chapters); {
+		end := start + 1
+		for end < len(chapters) && end-start < perEpisode && chapters[end].Position == chapters[end-1].Position+1 {
+			end++
+		}
+		group := chapters[start:end]
+		start = end
+		if len(group) == 1 {
+			episodes = append(episodes, newDramaChapterEpisode(projectID, startNumber+len(episodes), group[0], format, now))
+			continue
+		}
+		ids, runes := make([]string, 0, len(group)), 0
+		for _, chapter := range group {
+			ids = append(ids, chapter.ID)
+			runes += chapter.WordCount
+		}
+		first, last := group[0].Position+1, group[len(group)-1].Position+1
+		if runes > dramaEpisodeSourceRunes {
+			return nil, BadAuthRequest(fmt.Sprintf("第 %d–%d 章合计 %d 字，每集原文不超过 %d 字，请减少每集章数", first, last, runes, dramaEpisodeSourceRunes))
+		}
+		title := truncateRunes(group[0].Title, 40) + fmt.Sprintf(" 等 %d 章", len(group))
+		episodes = append(episodes, model.DramaEpisode{ID: newID(), ProjectID: projectID, Number: startNumber + len(episodes), Title: truncateRunes(title, 60), ChapterIDsJSON: encodeStringList(ids), SourceFormat: format, Stage: model.DramaEpisodeQueued, Revision: 1, CreatedAt: now, UpdatedAt: now})
+	}
+	return episodes, nil
 }
 
 func itoa(value int) string {
@@ -177,6 +267,10 @@ func (s *Service) ListDramas(userID string, req DramaListRequest) (map[string]an
 	if err != nil {
 		return nil, err
 	}
+	spends, err := s.repo.DramaBillingTotals(userID, ids)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]DramaListItem, 0, len(projects))
 	for _, project := range projects {
 		productionRow, ok := productions[project.ID]
@@ -188,7 +282,8 @@ func (s *Service) ListDramas(userID string, req DramaListRequest) (map[string]an
 		item := DramaListItem{
 			Project: project, Status: productionRow.Status, Stage: productionRow.Stage, PauseReason: productionRow.PauseReason,
 			EpisodeCount: count[0], DoneCount: count[1], CoverResourceIDs: covers[project.ID], AspectRatio: settings.AspectRatio,
-			StyleName: settings.StyleName, SpentMicrocredits: productionRow.SpentMicrocredits, UpdatedAt: project.UpdatedAt.Format(time.RFC3339),
+			StyleName: settings.StyleName, SpentMicrocredits: spends[project.ID].ChargedMicrocredits(), HeldMicrocredits: spends[project.ID].HeldMicrocredits(),
+			UpdatedAt: project.UpdatedAt.Format(time.RFC3339),
 		}
 		if len(item.CoverResourceIDs) > 0 {
 			item.CoverResourceID = item.CoverResourceIDs[0]
@@ -208,7 +303,7 @@ func (s *Service) DramaSummary(userID string, projectID string) (DramaSummary, e
 	if err != nil {
 		return DramaSummary{}, err
 	}
-	chapters, err := s.repo.DramaChapterSummaries(project.ID)
+	outline, err := s.repo.DramaChapterOutline(project.ID)
 	if err != nil {
 		return DramaSummary{}, err
 	}
@@ -228,9 +323,19 @@ func (s *Service) DramaSummary(userID string, projectID string) (DramaSummary, e
 	if err != nil {
 		return DramaSummary{}, err
 	}
-	words := 0
-	for _, chapter := range chapters {
+	chapterCount, words, reservedCount, reservedWords := 0, 0, 0, 0
+	for _, chapter := range outline {
+		if chapter.Status == model.ProjectUnitStatusReserved {
+			reservedCount++
+			reservedWords += chapter.WordCount
+			continue
+		}
+		chapterCount++
 		words += chapter.WordCount
+	}
+	spend, err := s.dramaBillingTotals(productionRow)
+	if err != nil {
+		return DramaSummary{}, err
 	}
 	meta := parseDramaBibleMeta(productionRow.BibleJSON)
 	summary := DramaSummary{
@@ -238,9 +343,10 @@ func (s *Service) DramaSummary(userID string, projectID string) (DramaSummary, e
 		Production: DramaProductionView{
 			Status: productionRow.Status, Stage: productionRow.Stage, PauseReason: productionRow.PauseReason,
 			Settings: parseDramaSettings(productionRow.SettingsJSON), BudgetMicrocredits: productionRow.BudgetMicrocredits,
-			SpentMicrocredits: productionRow.SpentMicrocredits, PlanDone: productionRow.PlanDone, PlanCursor: productionRow.PlanCursor,
+			SpentMicrocredits: spend.ChargedMicrocredits(), CanvasSpentMicrocredits: spend.CanvasChargedMicrocredits, HeldMicrocredits: spend.HeldMicrocredits(),
+			PlanDone: productionRow.PlanDone, PlanCursor: productionRow.PlanCursor,
 			SampleApproved: productionRow.SampleApproved, AssetsReleased: productionRow.AssetsReleased, Logline: meta.Logline, Tone: meta.Tone,
-			ChapterCount: len(chapters), WordCount: words,
+			ChapterCount: chapterCount, WordCount: words, ReservedChapterCount: reservedCount, ReservedWordCount: reservedWords,
 		},
 		Episodes:  make([]DramaEpisodeRow, 0, len(episodes)),
 		JobCounts: jobCounts,
@@ -259,7 +365,8 @@ func (s *Service) DramaSummary(userID string, projectID string) (DramaSummary, e
 			ID: episode.ID, Number: episode.Number, Title: episode.Title, Synopsis: truncateRunes(episode.Synopsis, 120), Stage: episode.Stage, SourceFormat: production.NormalizeSourceFormat(episode.SourceFormat), Error: episode.Error,
 			ShotCount: episode.ShotCount, DurationMs: episode.DurationMs, Approved: episode.Approved, MediaReleased: episode.MediaReleased, AwaitingMedia: held,
 			FinalResourceID: episode.FinalResourceID, FinalStale: episode.FinalStale,
-			Stats: DramaEpisodeStats{Segments: stat.Total, PromptReady: stat.PromptReady, VideoReady: stat.VideoReady, Failed: stat.Failed},
+			Stats:    DramaEpisodeStats{Segments: stat.Total, PromptReady: stat.PromptReady, VideoReady: stat.VideoReady, Failed: stat.Failed},
+			Revision: episode.Revision, UpdatedAt: episode.UpdatedAt.Format(time.RFC3339),
 		})
 		if episode.Stage == model.DramaEpisodeReview {
 			summary.Inbox = append(summary.Inbox, DramaInboxItem{ID: "review:" + episode.ID, Kind: "review", Severity: "info", Title: "第 " + itoa(episode.Number) + " 集视频提示词待审阅", Detail: "确认剧情段提示词后继续生成视频", EpisodeID: episode.ID})
@@ -529,7 +636,30 @@ func (s *Service) DramaJobs(userID string, projectID string, limit int) ([]Drama
 	for _, job := range jobs {
 		views = append(views, dramaJobView(job))
 	}
+	if err := s.attachDramaProviderStages(project.UserID, views); err != nil {
+		return nil, err
+	}
 	return views, nil
+}
+
+// attachDramaProviderStages 为生成中的作业补上上游进度文案；一次查询覆盖整批作业。
+func (s *Service) attachDramaProviderStages(userID string, views []DramaJobView) error {
+	ids := []string{}
+	for _, view := range views {
+		if view.Status == model.DramaJobRunning && view.TaskID != "" {
+			ids = append(ids, view.TaskID)
+		}
+	}
+	stages, err := s.repo.RunningTaskStages(userID, ids)
+	if err != nil {
+		return err
+	}
+	for i := range views {
+		if stage := stages[views[i].TaskID]; views[i].Status == model.DramaJobRunning && stage != "" {
+			views[i].ProviderStage = stage
+		}
+	}
+	return nil
 }
 
 func (s *Service) DramaCasts(userID string, projectID string) ([]model.DramaCast, error) {
@@ -612,6 +742,22 @@ func (s *Service) fillDramaSegmentViews(projectID string, p *model.DramaProducti
 			}
 		}
 	}
+	videoJobs := []DramaJobView{}
+	for _, view := range detail.Segments {
+		if view.VideoJob != nil {
+			videoJobs = append(videoJobs, *view.VideoJob)
+		}
+	}
+	if err := s.attachDramaProviderStages(p.UserID, videoJobs); err != nil {
+		return err
+	}
+	for i := range detail.Segments {
+		for _, job := range videoJobs {
+			if view := &detail.Segments[i]; view.VideoJob != nil && view.VideoJob.ID == job.ID {
+				view.VideoJob.ProviderStage = job.ProviderStage
+			}
+		}
+	}
 	drafts := buildDramaSegmentDrafts(settings, parseDramaBibleMeta(p.BibleJSON), detail.Shots, castByID, rows)
 	for i, draft := range drafts {
 		if i >= len(rows) || rows[i].SegmentIndex != draft.view.Index {
@@ -621,7 +767,7 @@ func (s *Service) fillDramaSegmentViews(projectID string, p *model.DramaProducti
 		if i > 0 {
 			previous = &rows[i-1]
 		}
-		request, _, prepareErr := s.prepareDramaSegment(settings, draft, rows[i], previous, castByID)
+		request, _, _, prepareErr := s.prepareDramaSegment(settings, draft, rows[i], previous, castByID)
 		if prepareErr != nil {
 			request.Warning = prepareErr.Error()
 		}
@@ -672,11 +818,27 @@ func buildDramaSegmentDrafts(settings DramaSettings, meta dramaBibleMeta, shots 
 	for position, group := range groups {
 		view := DramaSegmentView{Index: group[0].SegmentIndex, Title: firstNonEmpty(group[0].SegmentTitle, group[0].Scene, "剧情段"), ShotIDs: []string{}, Request: DramaSegmentRequest{References: []DramaSegmentReference{}}}
 		characterIDs, propIDs, sceneIDs := []string{}, []string{}, []string{}
-		input := production.SegmentPromptInput{Index: position, Count: len(groups), Title: view.Title, AspectRatio: settings.AspectRatio, Style: settings.StylePrompt, VisualRules: meta.VisualRules, Language: settings.Language, PauseMs: settings.Storyboard.DialoguePauseMs()}
+		// lookForCharacter 把本段某角色映射到本段镜头选用的造型行；一段里同一角色取第一个出现的造型。
+		lookForCharacter := map[string]string{}
+		for _, shot := range group {
+			for _, lookID := range decodeStringList(shot.LookCastIDsJSON) {
+				look, ok := castByID[lookID]
+				if ok && look.ParentID != "" {
+					if _, set := lookForCharacter[look.ParentID]; !set {
+						lookForCharacter[look.ParentID] = lookID
+					}
+				}
+			}
+		}
+		input := production.SegmentPromptInput{Index: position, Count: len(groups), Title: view.Title, AspectRatio: settings.AspectRatio, Style: settings.StylePrompt, VisualRules: meta.VisualRules, Language: settings.Language, PauseMs: settings.Storyboard.DialoguePauseMs(), Independent: settings.parallelVideo(), Performance: settings.Storyboard.Performance, CameraMotion: settings.Storyboard.CameraMotion}
 		for _, shot := range group {
 			view.ShotIDs = append(view.ShotIDs, shot.ID)
 			view.DurationMs += shot.DurationMs
 			for _, id := range decodeStringList(shot.CastIDsJSON) {
+				// 角色选了造型时，参考图与外观用造型行；否则用角色本体。
+				if lookID, ok := lookForCharacter[id]; ok {
+					id = lookID
+				}
 				if _, ok := castByID[id]; ok && !containsString(characterIDs, id) {
 					characterIDs = append(characterIDs, id)
 				}
@@ -705,8 +867,18 @@ func buildDramaSegmentDrafts(settings DramaSettings, meta dramaBibleMeta, shots 
 		for _, id := range referenceIDs {
 			cast := castByID[id]
 			label := fmt.Sprintf("参考图%d", len(view.Request.References)+1)
-			view.Request.References = append(view.Request.References, DramaSegmentReference{CastID: cast.ID, Label: label, Kind: cast.Kind, Name: cast.Name})
-			input.References = append(input.References, production.SegmentReference{Label: label, Kind: cast.Kind, Name: cast.Name, Detail: firstNonEmpty(cast.Appearance, cast.Description), Voice: cast.VoiceInstructions})
+			// 造型行：名称写“角色·造型”，声线沿用所属角色本体。
+			name, voice := cast.Name, cast.VoiceInstructions
+			if cast.ParentID != "" {
+				if base, ok := castByID[cast.ParentID]; ok {
+					voice = base.VoiceInstructions
+				}
+				if cast.LookName != "" {
+					name = cast.Name + "·" + cast.LookName
+				}
+			}
+			view.Request.References = append(view.Request.References, DramaSegmentReference{CastID: cast.ID, Label: label, Kind: cast.Kind, Name: name})
+			input.References = append(input.References, production.SegmentReference{Label: label, Kind: cast.Kind, Name: name, Detail: firstNonEmpty(cast.Appearance, cast.Description), Voice: voice})
 		}
 		drafts = append(drafts, dramaSegmentDraft{view: view, input: input, shots: group})
 	}
@@ -725,9 +897,10 @@ func buildDramaSegmentViews(settings DramaSettings, meta dramaBibleMeta, shots [
 		view := draft.view
 		view.PromptStatus = "none"
 		if row, ok := rowByIndex[view.Index]; ok {
-			view.ID = row.ID
+			view.ID, view.Revision, view.UpdatedAt = row.ID, row.Revision, row.UpdatedAt.Format(time.RFC3339)
 			view.Generated, view.PromptError = strings.TrimSpace(row.VideoPrompt), row.PromptError
 			view.VideoStatus, view.VideoResourceID, view.TailFrameResourceID, view.VideoError = row.VideoStatus, row.VideoResourceID, row.TailFrameResourceID, row.VideoError
+			view.VideoSeconds = row.VideoSeconds
 			view.VideoModel = segmentVideoChoice(row, settings.Models.Video)
 			view.PromptStatus = firstNonEmpty(row.PromptStatus, "queued")
 			if override := strings.TrimSpace(row.VideoPromptOverride); override != "" {
@@ -818,7 +991,7 @@ func (s *Service) UpdateDramaSegment(userID string, projectID string, episodeID 
 		}
 	}
 	if req.VideoPromptOverride != nil {
-		prompt := strings.TrimSpace(*req.VideoPromptOverride)
+		prompt := production.NormalizeReferenceTokens(strings.TrimSpace(*req.VideoPromptOverride))
 		if utf8.RuneCountInString(prompt) > 12000 {
 			return BadAuthRequest("段提示词过长（最多 12000 字）")
 		}

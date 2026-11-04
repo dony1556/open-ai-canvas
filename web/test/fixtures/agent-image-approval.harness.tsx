@@ -23,7 +23,7 @@ for (const [key, value] of Object.entries({
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { ApprovalCard } = await import("../../src/components/canvas/canvas-cloud-agent-panel-parts");
+const { AgentConversation, ApprovalCard } = await import("../../src/components/canvas/canvas-cloud-agent-panel-parts");
 const { canvasThemes } = await import("../../src/lib/canvas-theme");
 const { defaultImageCapabilityConfig } = await import("../../src/lib/model-capabilities");
 const { imagePresetForRatio, imageSizeConfigWithPresets } = await import("../../src/lib/image-size-presets");
@@ -95,13 +95,13 @@ test("真实图片审批卡片可切换比例、分辨率、质量，提交值�
         expect(JSON.parse(submitted!.imageParameters!)).toEqual({ seed: 42, count: 1, transparentBackground: false });
         expect(imageParameterRequest(profile, submitted!, true)).toEqual({ size, imageResolution: resolution, quality, seed: 42, count: 1, transparentBackground: false });
     };
-    const render = (submitting = false) =>
+    const render = (submitting = false, error?: string) =>
         root.render(
             <ApprovalCard
                 approval={{ approvalId: "image-approval", detail: { toolName: "generate_media", arguments: { ...initial, mode: "image" } }, reason: "" }}
                 theme={canvasThemes.dark}
                 submitting={submitting}
-                blocked={false}
+                error={error}
                 onReasonChange={() => {}}
                 onApprove={(settings) => {
                     submitted = settings;
@@ -145,13 +145,40 @@ test("真实图片审批卡片可切换比例、分辨率、质量，提交值�
         await press("同意执行");
         expect(submitted).toMatchObject({ channelId: channel.id, channelModelKey: "gpt-image-2.5", size: imagePresetForRatio("4k", "9:16").size, imageResolution: "4k", quality: "high" });
         expect(JSON.parse(submitted!.imageParameters!)).toEqual({ seed: 42, count: 1, transparentBackground: false });
+        await act(async () => render(false, "画布内容已变化，请重新读取画布并重新审批；未提交生成任务"));
+        expect(host.querySelector('[role="alert"]')?.textContent).toContain("画布内容已变化");
+        selected("9:16");
+        expect(button("同意执行").disabled).toBe(false);
         submitted = undefined;
         await act(async () => render(true));
+        expect(host.querySelector('[role="alert"]')).toBeNull();
         expect(host.querySelector("fieldset")?.disabled).toBe(true);
         await press("1:1");
         selected("9:16");
         await press("正在提交");
         expect(submitted).toBeUndefined();
+        await act(async () =>
+            root.render(
+                <AgentConversation
+                    theme={canvasThemes.dark}
+                    messages={[]}
+                    references={[]}
+                    busy={false}
+                    approval={{ approvalId: "conversation-approval", detail: { toolName: "generate_media", arguments: { ...initial, mode: "image" } }, reason: "" }}
+                    approvalSubmitting={false}
+                    approvalError="画布内容已变化，请重新审批"
+                    nodeCount={1}
+                    installedSkillCount={1}
+                    onChooseSkill={() => {}}
+                    onOpenSkillRecommendations={() => {}}
+                    onDraftPrompt={() => {}}
+                    onApprovalReasonChange={() => {}}
+                    onApprove={() => {}}
+                    onReject={() => {}}
+                />,
+            ),
+        );
+        expect(host.querySelector('[role="alert"]')?.textContent).toContain("画布内容已变化");
     } finally {
         await act(async () => root.unmount());
         host.remove();

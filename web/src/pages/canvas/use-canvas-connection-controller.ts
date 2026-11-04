@@ -11,7 +11,9 @@ import { connectedNodeCenterFromEdgeDrop } from "@/lib/canvas/canvas-connected-n
 import { canvasConnectionError, connectionInputSummary } from "@/lib/canvas/canvas-connection-policy";
 import { resolveCanvasConnectionTarget, type CanvasConnectionDropTarget as ConnectionDropTarget } from "@/lib/canvas/canvas-connection-hit";
 import { audioModelForConnectionInput } from "@/lib/model-selection";
-import { attachNodeToStoryboardRow, createCanvasNode, normalizeConnection, storyboardPromptTemplateMetadata, storyboardRowFromHandle } from "@/lib/canvas/canvas-project-domain";
+import { attachNodeToStoryboardRow, createCanvasNode, normalizeConnection, storyboardPromptTemplateMetadata, storyboardRowFromHandle, storyboardRowVideoPrompt } from "@/lib/canvas/canvas-project-domain";
+import { canvasImageNodeDimensions } from "@/lib/canvas/canvas-reference-image-size";
+import { imageNodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { createCanvasDrawingFromImage } from "@/lib/canvas/canvas-drawing-storage";
 import { isDrawingEngineAvailable, type CanvasDrawingEngine } from "@/lib/canvas/canvas-drawing-engine";
 import { normalizeRunningHubCapability, type AiConfig } from "@/stores/use-config-store";
@@ -252,7 +254,7 @@ export function useCanvasConnectionController({
             .map((nodeId) => nodesRef.current.find((node) => node.id === nodeId))
             .filter((node): node is CanvasNodeData => Boolean(node));
         const storyboardRow = batchSourceNodeIds.length ? undefined : nodeType === CanvasNodeType.Video ? storyboardRowFromHandle(nodesRef.current, pending.connection.nodeId, pending.connection.handleId) : undefined;
-        const videoPrompt = storyboardRow ? (storyboardRow.videoMotionPrompt || storyboardRow.plotDescription).trim() : "";
+        const videoPrompt = storyboardRow ? storyboardRowVideoPrompt(storyboardRow) : "";
         const sourceNode = pending.connection.handleType === "source" ? nodesRef.current.find((node) => node.id === pending.connection.nodeId) : undefined;
         const batchScriptPrompt = batchSourceNodes
             .filter((node) => node.type === CanvasNodeType.Text)
@@ -304,6 +306,15 @@ export function useCanvasConnectionController({
               ? pending.position
               : connectedNodeCenterFromEdgeDrop(pending.position, spec, pending.connection.handleType);
         const newNode = createCanvasNode(nodeType, position, metadata);
+        // 从图片拖出的新图片节点按来源比例占位；生成时未选尺寸也按这张参考图的比例。
+        const referenceSize = nodeType === CanvasNodeType.Image && !batchSourceNodeIds.length ? canvasImageNodeDimensions(sourceNode) : undefined;
+        const referenceNodeSize = referenceSize ? imageNodeSizeFromRatio(`${referenceSize.width}:${referenceSize.height}`) : null;
+        if (referenceNodeSize) {
+            // 新节点在来源右侧，保持靠近来源的左边缘和垂直中心。
+            newNode.position = { x: newNode.position.x, y: newNode.position.y + newNode.height / 2 - referenceNodeSize.height / 2 };
+            newNode.width = referenceNodeSize.width;
+            newNode.height = referenceNodeSize.height;
+        }
         if (nodeType === CanvasNodeType.Audio) {
             const probe = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             const input = probe ? connectionInputSummary(newNode.id, [...nodesRef.current, newNode], connectionsRef.current, probe) : undefined;

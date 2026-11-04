@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { canvasTaskBindingStatus } from "@/lib/canvas/canvas-task-state";
+import { canvasTaskBindingStatus, isStaleCanvasTaskObservation } from "@/lib/canvas/canvas-task-state";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 const node: CanvasNodeData = {
     id: "layer",
@@ -9,6 +9,17 @@ const node: CanvasNodeData = {
     height: 20,
     metadata: { taskId: "extract", content: "/opaque.png", status: "idle", layerExtraction: { sourceNodeId: "source", groupId: "group", index: 1, phase: "background-removal-required", extractionTaskId: "extract" } },
 };
+test("同一任务的迟到排队状态不能覆盖终态，新任务仍可绑定", () => {
+    for (const taskStatus of ["succeeded", "failed", "cancelled"]) {
+        const completed = { ...node, metadata: { ...node.metadata, taskStatus } };
+        for (const status of ["queued", "running"] as const) {
+            expect(isStaleCanvasTaskObservation(completed, { id: "extract", status })).toBe(true);
+            expect(isStaleCanvasTaskObservation(completed, { id: "new-task", status })).toBe(false);
+        }
+        expect(isStaleCanvasTaskObservation(completed, { id: "extract", status: "succeeded" })).toBe(false);
+    }
+    expect(isStaleCanvasTaskObservation(node, { id: "extract", status: "succeeded" })).toBe(false);
+});
 test("待去背景的原始提取成功仅为中间结果", () => {
     expect(canvasTaskBindingStatus(node, { id: "extract", status: "succeeded" })).toBe("idle");
 });

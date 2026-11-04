@@ -5,9 +5,10 @@ import { App } from "antd";
 import { applyGenerationTaskResultToNodes, generationTaskCanReloadResource, generationTaskNodeId, generationTaskOutputsApplied, shouldRecoverCanvasImageOutputs } from "@/lib/canvas/canvas-generation-task-sync";
 import { commitCanvasGenerationResult } from "@/lib/canvas/canvas-generation-result";
 import { reconcileImageBatchRoot } from "@/lib/canvas/canvas-image-batch-retry";
-import { canvasTaskBindingStatus, markCanvasTaskRecoveryUnconfirmed } from "@/lib/canvas/canvas-task-state";
+import { canvasTaskBindingStatus, isStaleCanvasTaskObservation, markCanvasTaskRecoveryUnconfirmed } from "@/lib/canvas/canvas-task-state";
+import { isCanvasNodeGenerating } from "@/lib/canvas/canvas-node-task-state";
 import { applyCanvasGenerationTaskNodeEffect, CanvasGenerationDurableAckError, isCanvasGenerationDurableAckError } from "@/services/canvas-generation-consumer";
-import { consumeGenerationTaskNode, ensureCanvasNodeAsset, retryCanvasAssetSyncAfterRateLimit, subscribeCanvasProjectAssetLinkFailures } from "@/services/project-asset-sync";
+import { consumeGenerationTaskNode, ensureCanvasNodeAsset, isGenerationOutputAssetDeletedError, retryCanvasAssetSyncAfterRateLimit, subscribeCanvasProjectAssetLinkFailures } from "@/services/project-asset-sync";
 import { listGenerationTasks, listTaskLogs, queryGenerationTask, subscribeGenerationTasks, type GenerationTask, type TaskLog } from "@/services/api/task-center";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
@@ -262,6 +263,7 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
             setNodes((current) =>
                 current.map((node) => {
                     if (node.id !== targetNodeId) return node;
+                    if (isStaleCanvasTaskObservation(node, task)) return node;
                     const failed = task.status === "failed" || task.status === "cancelled";
                     const extraction = node.metadata?.layerExtraction;
                     const rejectedLayer = extraction?.rejectedTaskId === task.id;
@@ -370,13 +372,20 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
                 // 物化/确认失败与图片内容校验失败分开，保存失败不能触发付费重生成。
                 const failure = !applyingResult && !isCanvasGenerationDurableAckError(error) ? new CanvasGenerationDurableAckError(error) : error;
                 if (generationTaskCanReloadResource(task)) {
+                    // 素材已被用户删除是终态：重新获取只会得到同样结果，不再展示“作品载入失败”的重新获取入口。
+                    const assetDeleted = isGenerationOutputAssetDeletedError(error);
                     setNodes((current) =>
                         current.map((node) => {
                             if (node.id !== nodeId || node.metadata?.taskId !== task.id) return node;
                             const applied = generationTaskOutputsApplied(node, task, current);
                             return {
                                 ...node,
-                                metadata: { ...node.metadata, status: applied ? node.metadata.status : NODE_STATUS_ERROR, resourceReloadAvailable: true, errorDetails: `结果已生成，应用结果失败：${error instanceof Error ? error.message : "未知错误"}` },
+                                metadata: {
+                                    ...node.metadata,
+                                    status: applied ? node.metadata.status : NODE_STATUS_ERROR,
+                                    resourceReloadAvailable: assetDeleted ? undefined : true,
+                                    errorDetails: assetDeleted ? "作品已从素材库删除，无法再载入；如需要请重新生成" : `结果已生成，应用结果失败：${error instanceof Error ? error.message : "未知错误"}`,
+                                },
                             };
                         }),
                     );
@@ -428,6 +437,7 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
                 if (aggregateBatchRoot && !pendingAgentContinuation) return false;
                 return (
                     shouldRecoverCanvasImageOutputs(node) ||
+                    isCanvasNodeGenerating(node) ||
                     pendingAgentContinuation ||
                     node.metadata?.status === NODE_STATUS_LOADING ||
                     node.metadata?.errorDetails === "页面刷新后生成已中断，请重新生成。" ||
@@ -520,6 +530,43 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
         [applyGenerationTaskResult, bindGenerationTask, message, nodesRef, observeSubscribedGenerationTask, setNodes],
     );
 
+    /**
+     * 重新获取节点已绑定任务的结果：只查询并接回原任务，不重新提交、不重复扣费。
+     * 用于页面轮询中断（任务其实仍在后台跑）或结果回写失败；任务未结束时继续观察到终态。
+     */
+    const resyncGenerationTaskNode = useCallback(
+        async (node: CanvasNodeData) => {
+            const taskId = node.metadata?.taskId;
+            if (!taskId || recoveringTaskIdsRef.current.has(taskId)) return;
+            recoveringTaskIdsRef.current.add(taskId);
+            const signal = consumerControllerRef.current.signal;
+            const ownsTask = (item: CanvasNodeData) => item.id === node.id && item.metadata?.taskId === taskId;
+            setNodes((current) => current.map((item) => (ownsTask(item) ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, resourceReloadAvailable: undefined } } : item)));
+            try {
+                const completed = await observeSubscribedGenerationTask(taskId, signal, (task) => {
+                    // 成功结果交给 applyGenerationTaskResult 一次性写入，避免先把旧内容标成完成。
+                    if (task.status !== "succeeded" && nodesRef.current.some(ownsTask)) bindGenerationTask(node.id, task);
+                });
+                if (signal.aborted || !nodesRef.current.some(ownsTask)) return;
+                if (completed.status === "succeeded") await applyGenerationTaskResult(node.id, completed);
+            } catch (error) {
+                if (signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
+                // applyGenerationTaskResult 已写入“可重新获取”的失败态时不覆盖，其余情况保留重新获取入口。
+                setNodes((current) =>
+                    current.map((item) =>
+                        ownsTask(item) && item.metadata?.status === NODE_STATUS_LOADING
+                            ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: generationFailureMetadata(error, nodeGenerationPrompt(item)).errorDetails, resourceReloadAvailable: true } }
+                            : item,
+                    ),
+                );
+                message.error("暂时无法获取结果，请稍后再试");
+            } finally {
+                recoveringTaskIdsRef.current.delete(taskId);
+            }
+        },
+        [applyGenerationTaskResult, bindGenerationTask, message, nodesRef, observeSubscribedGenerationTask, setNodes],
+    );
+
     useEffect(() => {
         const coordinator = recoveryCoordinatorRef.current!;
         if (!projectLoaded) {
@@ -580,6 +627,7 @@ export function useCanvasGeneration({ projectId, domainProjectId, projectLoaded,
         bindGenerationTask,
         finishGenerationRequest,
         openNodeTaskDetails,
+        resyncGenerationTaskNode,
         runningNodeId,
         setRunningNodeId,
         setTaskDetail,

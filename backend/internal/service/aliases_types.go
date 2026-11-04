@@ -11,6 +11,18 @@ const (
 )
 
 type (
+	YoruSettings                           = app.YoruSettings
+	YoruChatRequest                        = app.YoruChatRequest
+	SaveEcommerceProjectRequest            = app.SaveEcommerceProjectRequest
+	EcommerceCreativeDirectionsRequest     = app.EcommerceCreativeDirectionsRequest
+	EcommerceStyleChoice                   = app.EcommerceStyleChoice
+	EcommerceAgentSetting                  = app.EcommerceAgentSetting
+	EcommerceOrchestrationSetting          = app.EcommerceOrchestrationSetting
+	EcommerceCreativeDirection             = app.EcommerceCreativeDirection
+	EcommerceCreativeDirectionsResponse    = app.EcommerceCreativeDirectionsResponse
+	EcommerceCreativeDirectionSelection    = app.EcommerceCreativeDirectionSelection
+	EcommerceKnowledgeEvidence             = app.EcommerceKnowledgeEvidence
+	DeleteEcommerceProjectsRequest         = app.DeleteEcommerceProjectsRequest
 	BindProjectAssetImageRequest           = app.BindProjectAssetImageRequest
 	PaymentOrderQuery                      = app.PaymentOrderQuery
 	PaymentReconciliationQuery             = app.PaymentReconciliationQuery
@@ -364,6 +376,10 @@ type (
 	UpdateProjectRequest                   = app.UpdateProjectRequest
 	UpdateProjectUnitRequest               = app.UpdateProjectUnitRequest
 	UpdateUserRequest                      = app.UpdateUserRequest
+	UserGroupRequest                       = app.UserGroupRequest
+	UserGroupView                          = app.UserGroupView
+	PublicUserGroup                        = app.PublicUserGroup
+	PaymentSettings                        = app.PaymentSettings
 	UpdateWorkflowStepRequest              = app.UpdateWorkflowStepRequest
 	WorkbenchToolInput                     = app.WorkbenchToolInput
 	WorkbenchPresetInput                   = app.WorkbenchPresetInput

@@ -106,50 +106,41 @@ func (s *Service) SetWorkbenchPresetEnabled(actor *model.User, id string, enable
 }
 
 func (s *Service) CreateWorkbenchTask(userID string, req WorkbenchTaskInput, traceID, requestID string) (*model.Task, error) {
-	if req.Kind == WorkbenchKindImage {
-		if err := s.RequireFeature(FeatureImageWorkbench); err != nil {
-			return nil, err
-		}
-	} else if req.Kind == WorkbenchKindVideo {
-		if err := s.RequireFeature(FeatureVideoWorkbench); err != nil {
-			return nil, err
-		}
-	} else {
+	projectID := strings.TrimSpace(req.EcommerceProjectID)
+	if err := s.requireTaskGenerationFeatures(userID, "", "canvas_"+req.Kind, "", req.Kind, map[string]any{"metadata": map[string]any{"ecommerceProjectId": projectID}}); err != nil {
+		return nil, err
+	}
+	if req.Kind != WorkbenchKindImage && req.Kind != WorkbenchKindVideo {
 		return nil, BadAuthRequest("工作台类型无效")
 	}
 	resolved, err := s.workbenchDomain().ResolveTask(userID, req)
 	if err != nil {
 		return nil, err
 	}
-	providerConfig, err := s.resolveWorkbenchProviderConfig(req.Kind, resolved.Operation, resolved.Model, resolved.LogicalModelID, resolved.ChannelID, resolved.Parameters, resolved.Input)
+	providerConfig, err := s.resolveWorkbenchProviderConfig(userID, req.Kind, resolved.Operation, resolved.Model, resolved.LogicalModelID, resolved.ChannelID, resolved.Parameters, resolved.Input)
 	if err != nil {
 		return nil, err
 	}
 	resolved.Input["config"] = providerConfig
+	if projectID != "" {
+		resolved.Input["metadata"].(map[string]any)["ecommerceProjectId"] = projectID
+	}
 	modelName, ok := providerConfig["model"].(string)
 	if !ok || strings.TrimSpace(modelName) == "" {
 		return nil, BadAuthRequest("所选系统模型不可用")
 	}
 	resolved.Model = modelName
-	return s.CreateTask(userID, CreateTaskRequest{Type: resolved.TaskType, Operation: resolved.Operation, Prompt: resolved.Prompt, Model: resolved.Model, LogicalModelID: resolved.LogicalModelID, Input: resolved.Input, TraceID: traceID, RequestID: requestID, workbenchKind: req.Kind})
+	return s.CreateTask(userID, CreateTaskRequest{ProjectID: projectID, Type: resolved.TaskType, Operation: resolved.Operation, Prompt: resolved.Prompt, Model: resolved.Model, LogicalModelID: resolved.LogicalModelID, Input: resolved.Input, TraceID: traceID, RequestID: requestID, workbenchKind: req.Kind})
 }
 
 func (s *Service) WorkbenchTasks(userID, kind string, activeOnly bool, limit int) ([]TaskSummary, error) {
-	if kind == WorkbenchKindImage {
-		if err := s.RequireFeature(FeatureImageWorkbench); err != nil {
-			return nil, err
-		}
-	} else if kind == WorkbenchKindVideo {
-		if err := s.RequireFeature(FeatureVideoWorkbench); err != nil {
-			return nil, err
-		}
-	} else {
+	if kind != WorkbenchKindImage && kind != WorkbenchKindVideo {
 		return nil, BadAuthRequest("工作台类型无效")
 	}
 	return s.TasksWithOptions(userID, TaskListOptions{Limit: limit, ActiveOnly: activeOnly, WorkbenchKind: kind})
 }
 
-func (s *Service) resolveWorkbenchProviderConfig(kind, operation, modelName, logicalModelID, channelID string, parameters map[string]any, input map[string]any) (map[string]any, error) {
+func (s *Service) resolveWorkbenchProviderConfig(userID, kind, operation, modelName, logicalModelID, channelID string, parameters map[string]any, input map[string]any) (map[string]any, error) {
 	config := map[string]any{"mode": kind}
 	if kind == WorkbenchKindImage {
 		for _, key := range []string{"size", "quality", "imageResolution", "count"} {
@@ -186,7 +177,11 @@ func (s *Service) resolveWorkbenchProviderConfig(kind, operation, modelName, log
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := s.resolveSystemChannelModelSelection(normalizedInput, "canvas_"+kind, operation)
+	access, err := s.userGroupAccess(userID)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := s.resolveSystemChannelModelSelection(access, normalizedInput, "canvas_"+kind, operation)
 	if err != nil {
 		return nil, err
 	}

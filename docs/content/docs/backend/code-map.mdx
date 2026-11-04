@@ -5,15 +5,30 @@ description: 从产品功能快速定位主要代码入口
 
 # 代码功能地图
 
+## 电商 Agent 与后台知识库
+
+- 页面：`web/src/pages/ecommerce/`；后台：`web/src/pages/admin/ecommerce-agent-config-page.tsx`（开放状态、阶段模型 `ecommerce-stage-models.tsx`、创作助手 `ecommerce-assistant-settings.tsx`）；`ecommerce-management-page.tsx`（知识与技能标签页：`ecommerce-knowledge-page.tsx`、`ecommerce-skills-page.tsx`、`ecommerce-categories-page.tsx`，内容头 `ecommerce-library-panel.tsx`）；`knowledge-domain-coverage.ts`。
+- API：`web/src/services/api/ecommerce.ts`、`ecommerce-knowledge.ts`；会话恢复：`web/src/services/ecommerce-session.ts`。
+- 服务端：`backend/internal/handler/ecommerce*.go` → `app/ecommerce*.go` → `repository/ecommerce*.go`、`model/models_ecommerce*.go`；领域协议与知识方法在 `ecommerceagent/`、`ecommerceskills/`。
+- 数据迁移：`backend/internal/database/ecommerce_migration.go`；原件受限导出：`assets/access.go`、`app/resource_access.go`。详见 [电商 Agent 与知识库](./ecommerce-agent)。
+- 离线知识数据与校验清单：`backend/internal/ecommerceknowledge/bundle/`；解码与校验：`ecommerceknowledge/bundle.go`；首次启动初始化：`app/ecommerce_knowledge_bundle.go` 和 `cmd/server/main.go`；维护入口：`cmd/ecommerce-knowledge`。
+- Skills 管理与安装：`app/ecommerce_managed_skills.go`、`app/ecommerce_skill_install.go`、`ecommerceskills/catalog.go` 与 `packages/`；行业字典：`ecommercecatalog/`、`app/ecommerce_industry_taxonomy.go`；后台对应 `pages/admin/ecommerce-skills-page.tsx`、`ecommerce-categories-page.tsx`。
+- 小夜：`web/src/components/layout/yoru-widget.tsx`、`yoru-widget.css`、`web/src/assets/yoru/`；设置在 `pages/admin/ecommerce-assistant-settings.tsx`（「电商 Agent 配置」页的创作助手分区）；API 和鉴权计费接入在 `backend/internal/handler/yoru_assistant.go`、`app/yoru_assistant.go`。
+- 平台资料：`backend/internal/ecommerceagent/platform_knowledge.json` 由前后端共用，前端镜像显式复制该文件；安全排版与市场选角分别位于 `layout_safety.go`、`human_casting.go`，前端人物指导在 `pages/ecommerce/human-photography.ts`。
+
 ## 短剧自动制作
 
 - 纯逻辑：`backend/internal/production/`（作品圣经、分集与剧本提示词 `prompts.go`，模型输出解析 `parse.go`，分镜规则与时长 `storyboard.go` / `timing.go`，按视频模型上限切剧情段 `SegmentShotsForVideo`，段提示词素材稿 `segment_prompt.go` 与撰写要求 `segment_writer.go`，参考图方案 `assets.go`，用户分镜表直接导入 `storyboard_import.go`，原文台词逐句核对 `dialogue_check.go`）。
 - 调度循环：`backend/internal/app/drama_orchestrator.go`（同步任务结果 → 推导工作 → 按优先级派发，租约保证单项目单循环；成片时间线由各段视频拼接）；剧情段视频请求的组装、提交、回写与最后一帧抽取在 `drama_segment_video.go`（`prepareDramaSegment` 同时供预览与提交使用）。
 - 服务与用户操作：`app/drama_service.go`（创建、摘要、单集详情与剧情段视图）、`drama_actions.go`（审阅、镜头编辑、段提示词与段视频、设定重做、放行）、`drama_editing.go`（逐集追加、原文与素材类型修改、插入 / 删除镜头、上传并锁定参考图、台词核对）、`drama_models.go`（模型目录、视频能力 `dramaVideoProfile`、报价预估）；类型在 `drama_types.go`。
 - 持久化：`model/models_drama.go`、`repository/repository_drama.go`（调度与用户写入均为列级条件更新）；迁移 v61–v67、v71、v73 在 `database/migrations.go`。HTTP：`handler/drama_routes.go`。
-- 渲染：`app/timeline_render_plan.go` / `task_render.go` 用 ffmpeg 合成，保留段视频自带的声音。
+- 渲染：`app/timeline_render_plan.go` / `task_render.go` 用 ffmpeg 合成，保留段视频自带的声音；按片段宽高比选择裁切或补黑边（`renderSegmentFit`），写入 AIGC 隐式标识（`renderAIGCLabel`）。媒体探测唯一入口 `app/media_probe.go`（宽高、时长、容器标签），存量视频尺寸修复在 `app/media_dimension_repair.go` 与 `repository/media_dimension_repair.go`。
+- 花费口径：`repository/drama_billing.go`（按计费订单汇总流水线与画布的实收、冻结额）、`app/drama_billing.go`（订单拆分与结算等待）；前端任务计费文案 `web/src/lib/generation-task-billing.ts`。
+- 浏览器精剪导出：`web/src/lib/timeline/timeline-to-ffmpeg.ts`（片段适配与来源标识参数）、`timeline-export-spec.ts`（导出规格预设）、`timeline-export-runner.ts`（执行步骤、字幕回退与警告）、`timeline-build.ts`（来源范围 `buildTimelineForScope`）。
 - 前端：`web/src/services/api/drama.ts`；`pages/projects/index.tsx`（作品列表）、`create.tsx`（上传与预估）、`detail.tsx`（制作台）。制作台子组件在 `pages/projects/studio/`：`storyboard.tsx`（剧情段卡片）、`segment-dialog.tsx`（剧情段弹窗：段视频、生成依据、镜头脚本与完整视频提示词）、`segment-parts.tsx`（状态、视频与生成依据共用组件）、`panels.tsx`（设定、待处理、制作设置）、`final-view.tsx`、`script-view.tsx`、`job-detail.tsx`；样式 `drama.css`。模型选择复用通用 `ModelPicker`（`drama-model-picker.tsx`、`lib/drama/model-choice.ts`）。
 - 回归：`internal/production/production_test.go`、`app/drama_orchestrator_test.go`、`app/drama_storyboard_test.go`、`app/drama_assets_test.go`、`web/src/lib/drama/*.test.ts`。
+- 精修画布（后端）：`app/drama_canvas.go`（作品的精修画布、投送媒体的素材登记、版本记录与来源、段视频采用与尾帧补抽、画布花费计入预算 `dramaTotalSpent`、画布任务预算闸门 `ensureDramaCanvasBudget`）、`repository/repository_drama_canvas.go`（画布花费汇总、段视频采用事务、短剧持有资源的引用 `DramaResourceReferences`）；尾帧抽取与视频时长读取在 `drama_segment_video.go`（`saveDramaTailFrame`、`inspectDramaVideo`）。Agent 工具 `drama_get_context` / `drama_adopt_canvas_media` 在 `app/cloud_agent_drama.go`，只在 `Scope.Drama`（运行画布关联短剧）时暴露。
+- 精修画布（前端）：投送的纯函数在 `web/src/lib/canvas/drama-canvas-projection.ts`（节点、段框、时间线、过期判断、分镜转短剧原文），副作用在 `web/src/services/drama-canvas.ts`（找到或新建精修画布、跳转参数、素材登记、分镜画布关联到新短剧）；画布页编排 `pages/canvas/use-canvas-drama.ts`，侧栏 `components/canvas/canvas-drama-sidebar.tsx`，采用弹窗 `components/canvas/canvas-drama-adopt-modal.tsx`。查询键 `lib/drama/drama-query-keys.ts` 与文案 `lib/drama/drama-format.ts` 由制作台和画布共用；制作台入口 `studio/use-studio.ts` 的 `useOpenDramaCanvas`，版本记录 `studio/take-list.tsx`。
 
 ## 画布实时会话
 
@@ -58,7 +73,7 @@ description: 从产品功能快速定位主要代码入口
 
 个人信息：`web/src/pages/settings/profile-pane.tsx` 协调头像、密码、邮箱和第三方重新核验，`profile-validation.ts` 提供密码、图片与过期校验，`services/api/profile.ts` 使用统一 `http` 调用。共享头像在 `components/layout/user-avatar.tsx`。后端 `handler/auth_profile.go` 接收鉴权和受限请求，`app/auth_profile.go` / `profile_avatar.go` 组合 auth 域，`auth/account.go` / `avatar.go` / `linuxdo.go` 校验身份与头像内容，`repository/account.go` / `user_avatar.go` 处理会话撤销、邮箱唯一性、验证码消费和头像的事务保存，schema v51 安装个人信息及重新核验字段。
 
-云端 Agent：`web/src/components/canvas/canvas-cloud-agent-panel.tsx` 协调对话、技能和审批，`canvas-cloud-agent-settings.tsx` 编辑偏好；`services/api/agent.ts` 消费持久化运行及 SSE。手工提示词与媒体草稿更新仍共用 `lib/canvas/canvas-node-prompt.ts`，不覆盖已提交输入或生成结果。
+云端 Agent：`web/src/components/canvas/canvas-cloud-agent-panel.tsx` 协调对话、技能和审批，`canvas-cloud-agent-settings.tsx` 编辑偏好；输入框附件（画布节点引用、上传状态签名、文件校验、发送前补引用、复制文本）的纯逻辑在 `web/src/lib/canvas/agent-composer-attachments.ts`，画布页通过 `AgentCanvasContext` 的 `insertAgentFiles` / `insertAgentText` / `insertAgentAssets` / `insertAgentImageAsset` / `discardAgentNodes` 提供落点（`web/src/pages/canvas/project.tsx`，静默上传走 `use-canvas-upload.ts` 的 `quiet` 选项）；素材拖拽类型在 `web/src/lib/canvas/canvas-asset-dnd.ts`；发送队列的纯逻辑（入队、暂停、出队条件、插话条件）在 `web/src/lib/canvas/agent-outbox.ts`，本机读写在 `web/src/services/cloud-agent-outbox.ts`，队列托盘在 `components/canvas/canvas-cloud-agent-outbox.tsx`；`services/api/agent.ts` 消费持久化运行及 SSE。手工提示词与媒体草稿更新仍共用 `lib/canvas/canvas-node-prompt.ts`，不覆盖已提交输入或生成结果。
 
 多端接续沿用已有运行的 `conversationId`：后端 `app/cloud_agent_conversations.go`、`repository/cloud_agent_conversations.go` 提供按用户隔离的只读目录和分页轮次，并在任务预留事务内校验最新父轮；前端 `services/cloud-agent-history.ts`、`lib/canvas/cloud-agent-follow.ts` 和共享事件归约负责云端恢复、游标跟随与本机草稿保护。
 
@@ -73,9 +88,11 @@ description: 从产品功能快速定位主要代码入口
 | 参数结构与 schema | `internal/agent/tool/{read_args,schema}.go` 由 8 个读取参数类型生成 schema，实际解码使用同一类型；其余工具保留相邻契约。`app/cloud_agent_tools.go` 输出供应商 schema，golden 测试守工具顺序和字段语义 |
 | 画布事实与节点能力 | `internal/canvas/capability/` 注册能力，`app/cloud_agent_canvas_state.go` 提供分页/定向读取；`cloud_agent.go` 只给焦点节点有界摘要及一跳邻居。旧 CanvasIntelligence、平行 CanvasToolRegistry 与无执行器的标准工具代码已移除 |
 | 单一行为策略 | `internal/prompts/agent-system-policy.md` 为 v17 运行资源；`prompts/agent_policy.go` 只 embed 此文件，并派生媒体标识；`app/cloud_agent_policy.go` 编译能力、权限等事实。独立媒体策略文件已移除，`prompts/AGENTS.md` 仅是维护约定，不拼入模型输入 |
-| 个人经验与注入 | `internal/agent/memory/candidate.go` 保存带工具证据的候选；`app/cloud_agent_lessons.go` 只在成功收尾后提交待审，并按当前步骤召回最多 5 条、JSON 正文 6 KiB 的相关经验；`cloud_agent_memory_injection.go` 在模型任务入队时识别真实注入条目，`repository/agent_lesson.go` 持久化 |
-| 压缩提案与历史恢复 | `app/cloud_agent_memory_compact.go` 负责有界轮转批次和任务，`cloud_agent_memory_proposal*.go` 生成/展示提案并接收决定；`repository/agent_memory_proposal*.go` / `agent_memory_revision.go` 做归属与版本 CAS 事务，`handler/agent_memory_proposal.go` 接线。模型与 schema 58 见数据库专题 |
-| 用户设置与证据预览 | `web/src/pages/settings/agent-memory-pane.tsx` 管理记忆及来源证据，`agent-memory-proposals.tsx` 展示 before/after、批准拒绝和恢复；`services/api/agent-memories.ts` 是类型化调用面。管理员列表仍在 `pages/admin/components/agent-lessons-panel.tsx`，不能代批 |
+| 长期记忆文件 | `app/cloud_agent_memory_document.go` 负责条目校验、快照文本、首次创建与旧经验导入；`cloud_agent_memory_document_write.go` 执行 `memory_update` 的整批操作（auto 直接生效、review 写待确认）；`cloud_agent_memory_document_api.go` 提供读取、保存、模式、修订、撤销与确认；`cloud_agent_tools_memory.go` 是工具处理器；`repository/agent_memory_document.go` 做 revision CAS 和修订裁剪；`handler/agent_memory_document.go` 接线。表结构见数据库 Schema 76 |
+| 技能自动发现与市场推荐 | `app/cloud_agent_skill_catalog.go` 冻结本轮技能范围，生成有预算的目录与技能提示；`skills/skills_agent.go` / `repository/skills_agent.go` 读目录行、使用方式与读取次数；`skills/skills_recommendations.go` + `seed/recommendations.json` 是行业推荐；`app/cloud_agent_tools_memory.go` 内的 `skill_market_search` / `skill_recommend` 只返回候选和发出安装卡片事件 |
+| 旧版经验（保留） | `app/cloud_agent_lessons.go`、`cloud_agent_memory_compact.go`、`cloud_agent_memory_proposal*.go`、`repository/agent_lesson.go` 等保留读写、导出和手动压缩接口；Agent 不再注入或写入，压缩调度不再启动，计划后续移除 |
+| 前端记忆与技能 | `web/src/pages/settings/agent-memory-pane.tsx` 管理记忆文件、模式和修订；`services/api/agent-memory.ts` 是调用面；聊天里的记忆与安装卡片在 `components/canvas/canvas-cloud-agent-memory-cards.tsx`；行业推荐弹窗在 `components/skills/skill-recommendations-modal.tsx`；管理员只读查看在 `pages/admin/components/agent-memory-documents-panel.tsx` |
+| 回复选项卡片与停靠 | `web/src/lib/canvas/agent-reply-options.ts` 识别回复末尾的编号选项，`components/canvas/canvas-agent-reply-options.tsx` 渲染卡片（`ask_user` 单选共用）；`lib/canvas/agent-panel-dock.ts`、`components/canvas/use-agent-panel-dock.ts` 管理右侧停靠，`layouts/user-layout.tsx` 为停靠面板让出宽度 |
 | 画布逐步撤销 | `app/cloud_agent_mutation.go` 生成有界快照及撤销凭据，`cloud_agent_canvas_events.go` 写 `canvas_updated.undo`，`cloud_agent_undo.go` 校验最新变更/哈希并幂等撤销；前端 `lib/canvas/agent-canvas-undo.ts` 与聊天卡片按凭据中的原运行和画布提交 |
 | 评测与架构守卫 | `internal/agent/architecture/` 守 Agent 依赖方向、协议map暴露及复杂度/尺寸存量基线；`backend/.golangci.yml` 接 Agent 域静态检查 |
 
@@ -90,6 +107,7 @@ description: 从产品功能快速定位主要代码入口
 | 推广中心 | `web/src/pages/referral/`、`pages/admin/referral/referral-admin-page.tsx`、`pages/admin/users/users-drawer.tsx`（推广人开关） | `services/api/referral.ts`、后端 `internal/handler/referral.go`、`internal/app/referral.go`（设置、资格、绑定、返佣）、`internal/repository/referral.go` |
 | 视频 Token 报价与结算 | `web/src/pages/admin/components/channel-model-price-tier-fields.tsx`、`web/src/components/model-picker.tsx` | `lib/model-pricing.ts`、`services/api/logical-models.ts`；后端 `app/video_token_billing.go` 管像素与时长估算，`app/logical_model_quote.go` 复用准入与价格规则，`app/analytics.go` 提取可信用量，`repository/finance.go` 按订单快照退补差额 |
 | 任务中心 | `web/src/pages/tasks/` | `services/api/task-center.ts`、`services/api/task-text-stream.ts` |
+| 图片 / 视频生成（`/toolbox/image`、`/toolbox/video`） | `web/src/pages/workbench/image-workbench-page.tsx` | 页面编排状态、批量提交与轮询；`workbench-composer.tsx` 创作面板分区；`workbench-gallery.tsx` 按批次的作品画廊；`workbench-viewer.tsx` 大图预览；`workbench-scene-library.tsx` 场景库；`workbench-asset-picker.tsx` 素材库选图；纯函数 `workbench-batches.ts`（拆分任务、按批次归组、解析产物）与 `workbench-presets.ts`（画幅用途、灵感词、场景细分）；样式 `workbench.css`；接口 `services/api/workbench.ts`；后端 `internal/workbench/tasks.go`（任务校验与批次字段）、`internal/app/workbench_bridge.go`、`internal/app/task_output.go`（列表 `clientContext.batchId`） |
 | 产品模型与渠道选择 | `web/src/components/model-picker.tsx`、`pages/admin/components/channel-model-editor.tsx` | `lib/model-picker-groups.ts` 只构建跨渠道展示分组；`lib/user-session.ts` 透传渠道展示名；`components/model-logo.tsx` 按需加载原色图标；后端 `app/channel_models.go` 校验写入，`app/model_catalog.go` 发布目录，schema v24 增加 `channel_label` |
 | 系统渠道规格利润率与批量调价 | `web/src/pages/admin/components/channel-model-manager.tsx`、`channel-model-reprice-dialog.tsx` | 弹窗按模型分组展示多规格、重新计算与逐项编辑；`channel-model-cost-summary.tsx` 展示价格，`channel-model-pricing.ts` 精确四舍五入并组装最终售价；后端 `handler/finance.go` 接收批量请求，`app/channel_model_pricing.go` 校验权限、最终价格及快照版本，`repository/channel_model_pricing.go` 事务保存及版本冲突检测 |
 | 我的素材 | `web/src/pages/assets/` | `stores/use-asset-store.ts`、`services/image-storage.ts` |
@@ -117,7 +135,7 @@ Pi SDK 执行前的参数校验失败由 `agent-runtime/pi/agent-runtime.mjs` �
 | 职责 | 代码位置 |
 | --- | --- |
 | 页面装配和跨域动作协调 | `web/src/pages/canvas/project.tsx` |
-| 画布领域规则和生成协议 | `web/src/lib/canvas/canvas-project-domain.ts`、`canvas-project-generation.ts`、`produced-model.ts` |
+| 画布领域规则和生成协议 | `web/src/lib/canvas/canvas-project-domain.ts`、`canvas-project-generation.ts`、`produced-model.ts`；图生图默认跟随参考图比例：`canvas-reference-image-size.ts`（提示词面板 `buildNodeConfig` 与生成 `buildGenerationConfig` 共用） |
 | 项目恢复、持久化和项目级动作 | `web/src/pages/canvas/use-canvas-project-lifecycle.ts` |
 | 画布 operations 同步与本地 journal | `web/src/services/user-data-sync.ts` 协调快照和确认；`web/src/services/canvas-mutation-batches.ts` 按服务端 500 条上限顺序提交、先持久化后发送并保留重放 ID；`web/src/services/api/user-data.ts`、`web/src/lib/canvas/canvas-content.ts`、`web/src/pages/canvas/canvas-sync-status.tsx`、`web/src/stores/use-sync-progress-store.ts` |
 | 内部资源保护与维护快照 | `backend/internal/canvas/canvas_history.go`、`repair_resources.go`、`backend/internal/repository/canvas_history.go`；仅供资源完整性维护和审计，不提供用户历史树、预览或恢复入口 |
@@ -201,6 +219,7 @@ HTTP 请求 -> handler -> service（稳定导入面 / 别名）-> app（组合�
 | 管理后台批量操作 | `handler/auth.go` | `internal/app/admin.go`、`repository/admin_audit.go`、`repository/analytics.go` |
 | 管理后台存储资源 | `handler/admin_storage.go` | `internal/app/admin_storage.go`、`repository/admin_storage.go` |
 | 资源与请求策略 | `handler/auth.go`、`handler/security.go` | `internal/platform`、`internal/app/upload_quota.go`、`storage_quota.go`、`coordination.go` |
+| 用户分组与多币种计价 | `handler/admin_user_group_routes.go`、`handler/payment.go`（`/payments/settings`） | `internal/app/user_groups.go`（分组快照、`userGroupAccess` 渠道可见性与价格因子、管理端增删改）、`finance.go`（`groupTierPrices` 换算并写入账单快照）、`model_catalog.go` / `logical_models_catalog.go`（按分组过滤并展示实际单价）、`payment_settings.go`（默认充值货币）、`repository/repository_user_groups.go` |
 | 存储空间套餐与只读 | `handler/storage_guard.go`、`handler/storage_grants.go` | `internal/app/storage_capacity.go`（有效容量、宽限期与只读、扩容赠送/撤销）、`payment_products.go`（商品类型）、`repository/storage_grants.go`、`repository/payment.go`（`grantPaymentStorage`） |
 | 推广中心 | `handler/referral.go` | `internal/app/referral.go`（`referral` 设置、`referralEligible`、注册绑定 `bindReferral`、入账后 `grantReferralCommission`）、`repository/referral.go`（`GrantReferralCommission` 同事务写返佣、流水与余额） |
 | 模型响应拦截 | `handler/response_interception.go`、`handler/custom_proxy.go` | `internal/app/response_interception.go`、`repository/repository.go` |

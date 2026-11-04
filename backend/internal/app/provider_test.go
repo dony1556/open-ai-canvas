@@ -542,8 +542,30 @@ func TestCanonicalAgentBodiesPreserveAssistantToolCalls(t *testing.T) {
 		t.Fatalf("responses input = %#v", responseInput)
 	}
 	functionCall, _ := responseInput[2].(map[string]interface{})
-	if functionCall["type"] != "function_call" || functionCall["name"] != "canvas_get_state" || functionCall["id"] != "fc-5" || functionCall["item_reference"] != "fc-5" {
+	if functionCall["type"] != "function_call" || functionCall["name"] != "canvas_get_state" || functionCall["id"] != "fc-5" || functionCall["call_id"] != "call-5" {
 		t.Fatalf("responses function call = %#v", functionCall)
+	}
+	if _, exists := functionCall["item_reference"]; exists {
+		t.Fatalf("responses function call contains unsupported item_reference: %#v", functionCall)
+	}
+}
+
+func TestCanonicalAgentResponsesToolRoundTripWireFields(t *testing.T) {
+	request := canonicalAgentRequest{Messages: []map[string]interface{}{
+		{"type": "function_call", "id": "fc-1", "call_id": "call-1", "name": "canvas_get_state", "arguments": "{}"},
+		{"role": "tool", "tool_call_id": "call-1", "content": `{"nodes":[]}`},
+	}}
+	body, err := canonicalAgentResponsesBody(&request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := json.Marshal(body["input"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"arguments":"{}","call_id":"call-1","id":"fc-1","name":"canvas_get_state","type":"function_call"},{"call_id":"call-1","output":"{\"nodes\":[]}","type":"function_call_output"}]`
+	if string(wire) != want {
+		t.Fatalf("tool round trip wire = %s, want %s", wire, want)
 	}
 }
 
@@ -2129,6 +2151,50 @@ func TestRunVideoTaskUsesXAIVideoGenerationEndpoint(t *testing.T) {
 		t.Fatalf("video = %#v", result["video"])
 	}
 	want := "POST /v1/videos/generations,GET /v1/videos/video-1,GET /files/video.mp4"
+	if got := strings.Join(paths, ","); got != want {
+		t.Fatalf("paths = %q, want %q", got, want)
+	}
+}
+
+func TestRunVideoTaskXAIVideoNestedVideoURL(t *testing.T) {
+	t.Setenv("CANVAS_ALLOW_PRIVATE_UPSTREAMS", "true")
+	var paths []string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/videos/generations":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"request_id":"video-nested-1"}`))
+		case "GET /v1/videos/video-nested-1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"done","video":{"duration":15,"url":"` + server.URL + `/files/nested-video.mp4"}}`))
+		case "GET /files/nested-video.mp4":
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("nested-video-content"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result, err := runVideoTaskForTest(context.Background(), canvasGenerationInput{
+		Prompt: "grok make video",
+		Config: providerConfig{
+			BaseURL:       server.URL + "/v1",
+			APIKey:        "test-key",
+			Model:         "grok-imagine-video-1.5",
+			InterfaceType: "xai-video",
+		},
+	})
+	if err != nil {
+		t.Fatalf("runVideoTask() error = %v", err)
+	}
+	video, ok := result["video"].(map[string]interface{})
+	if !ok || video["dataUrl"] != "data:video/mp4;base64,bmVzdGVkLXZpZGVvLWNvbnRlbnQ=" {
+		t.Fatalf("video = %#v", result["video"])
+	}
+	want := "POST /v1/videos/generations,GET /v1/videos/video-nested-1,GET /files/nested-video.mp4"
 	if got := strings.Join(paths, ","); got != want {
 		t.Fatalf("paths = %q, want %q", got, want)
 	}

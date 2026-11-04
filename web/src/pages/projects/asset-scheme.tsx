@@ -2,12 +2,12 @@ import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Input } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
-import { BookMarked, Check, Eye, FileText, PenLine, RotateCcw, Search, Sparkles, TriangleAlert } from "lucide-react";
+import { BookMarked, Check, Eye, FileText, PenLine, RotateCcw, Search, TriangleAlert, Blocks } from "lucide-react";
 
 import { AppModal } from "@/components/ui/product/app-modal";
 import { CHARACTER_VARIABLES, renderAssetPrompt, SCENE_VARIABLES, unknownAssetVariables } from "@/lib/drama/asset-prompt";
 import { cn } from "@/lib/utils";
-import { getDramaAssetSchemes, type DramaAssetMode, type DramaAssetSchemeCatalog, type DramaAssetSettings } from "@/services/api/drama";
+import { getDramaAssetSchemes, type DramaAssetMode, type DramaAssetSchemeCatalog, type DramaAssetSettings, type DramaModelOption } from "@/services/api/drama";
 import { getSkillFile, listAddedSkills, listSkillFiles } from "@/services/api/skills";
 
 // 角色/场景参考图方案：开工前选定，设置页可改。保存的是全文提示词，预览就是实际发送的内容。
@@ -62,7 +62,22 @@ function SchemeGlyph({ mode }: { mode: DramaAssetMode }) {
     );
 }
 
-export function AssetSchemePicker({ value, onChange, sample, layout = "wide" }: { value?: DramaAssetSettings; onChange: (value: DramaAssetSettings) => void; sample?: Partial<AssetPreviewSample>; layout?: "wide" | "compact" }) {
+/**
+ * imageModel 是当前选中的图片模型：用来只列出它能给出的画幅与分辨率档位，并提前提示保存时会被拒绝的组合。
+ */
+export function AssetSchemePicker({
+    value,
+    onChange,
+    sample,
+    layout = "wide",
+    imageModel,
+}: {
+    value?: DramaAssetSettings;
+    onChange: (value: DramaAssetSettings) => void;
+    sample?: Partial<AssetPreviewSample>;
+    layout?: "wide" | "compact";
+    imageModel?: DramaModelOption;
+}) {
     const { modal } = App.useApp();
     const catalogQuery = useAssetSchemes();
     const catalog = catalogQuery.data;
@@ -71,6 +86,10 @@ export function AssetSchemePicker({ value, onChange, sample, layout = "wide" }: 
     const editorRef = useRef<TextAreaRef>(null);
     const preview = { ...FALLBACK_SAMPLE, ...Object.fromEntries(Object.entries(sample || {}).filter(([, item]) => item)) } as AssetPreviewSample;
     if (!catalog || !value) return <div className="drama-assets is-loading">正在读取参考图方案…</div>;
+    // imageModel 是角色参考图实际使用的图片模型；能力未知（模型列表未加载）时不做限制，交给服务端保存时校验。
+    // 道具与场景固定 16:9，能列入短剧模型目录的图片模型都给得出。
+    const ratios = imageModel?.imageRatios;
+    const ratioProblems = ratios && !ratios.includes(value.characterRatio) ? [value.characterRatio] : [];
 
     const scheme = catalog.schemes.find((item) => item.mode === value.mode);
     const prompt = tab === "character" ? value.characterPrompt : value.scenePrompt;
@@ -145,14 +164,32 @@ export function AssetSchemePicker({ value, onChange, sample, layout = "wide" }: 
                 <div className="drama-assets-ratio">
                     <span>角色参考图画幅</span>
                     <div className="drama-tabs" role="radiogroup" aria-label="角色参考图画幅">
-                        {CUSTOM_RATIOS.map((ratio) => (
-                            <button key={ratio} type="button" role="radio" className="drama-tab" aria-checked={value.characterRatio === ratio} onClick={() => onChange({ ...value, characterRatio: ratio })}>
-                                {ratio}
-                            </button>
-                        ))}
+                        {CUSTOM_RATIOS.map((ratio) => {
+                            const unsupported = Boolean(ratios && !ratios.includes(ratio));
+                            return (
+                                <button
+                                    key={ratio}
+                                    type="button"
+                                    role="radio"
+                                    className="drama-tab"
+                                    aria-checked={value.characterRatio === ratio}
+                                    disabled={unsupported && value.characterRatio !== ratio}
+                                    title={unsupported ? "所选图片模型没有接近这个画幅的尺寸" : undefined}
+                                    onClick={() => onChange({ ...value, characterRatio: ratio })}
+                                >
+                                    {ratio}
+                                </button>
+                            );
+                        })}
                     </div>
-                    <small>实际像素按图片模型支持的最接近档位出图</small>
+                    <small>画幅通过尺寸参数发给图片模型；模型给不出接近的尺寸时不能选择</small>
                 </div>
+            ) : null}
+            {ratioProblems.length ? (
+                <p className="drama-assets-warning" role="alert">
+                    <TriangleAlert className="size-3.5" />
+                    角色参考图所用的图片模型给不出 {ratioProblems.join("、")} 画幅，保存时会被拒绝。请在上方换用能指定这个尺寸的角色图片模型{value.mode === "custom" ? "，或改角色参考图画幅" : ""}。
+                </p>
             ) : null}
 
             <div className="drama-assets-editor">
@@ -201,7 +238,7 @@ export function AssetSchemePicker({ value, onChange, sample, layout = "wide" }: 
                 ) : null}
                 {tab === "character" && value.sourceSkillName ? (
                     <p className="drama-assets-source">
-                        <Sparkles className="size-3.5" />
+                        <Blocks className="size-3.5" />
                         约束来自技能「{value.sourceSkillName}」{value.sourcePath ? ` · ${value.sourcePath}` : ""}
                     </p>
                 ) : null}

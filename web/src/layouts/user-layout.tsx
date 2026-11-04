@@ -3,12 +3,14 @@ import { useLocation } from "react-router";
 import { ConfigProvider } from "antd";
 
 import { AppWorkspaceShell } from "@/components/layout/app-top-nav";
+import { useAgentPanelDock } from "@/components/canvas/use-agent-panel-dock";
 import { cn } from "@/lib/utils";
 import { isSpatialWorkbenchPath } from "@/lib/workspace-routes";
 import { getWorkspaceAntThemeConfig } from "@/lib/app-theme";
 import { useUserStore } from "@/stores/use-user-store";
 import "@/styles/workspace-product.css";
 import "@/styles/workspace-menus.css";
+import { YoruWidget } from "@/components/layout/yoru-widget";
 
 const workspaceTheme = getWorkspaceAntThemeConfig();
 // 平台唯一的 Agent 面板按需加载，不拖慢首屏；画布编辑器只发布画布上下文，不再自己渲染面板。
@@ -21,6 +23,9 @@ export default function UserLayout({ children }: { children: ReactNode }) {
     const canvasEditor = /^\/canvas\/[^/]+(?:\/|$)/.test(pathname);
     const productWorkspace = !adminWorkspace && !canvasEditor;
     const userId = useUserStore((state) => state.user?.id);
+    // Agent 停靠在画布右侧时，工作区让出同样的宽度，画布、顶栏和角落控件都不被遮挡。
+    const agentDock = useAgentPanelDock();
+    const agentDocked = Boolean(userId) && canvasEditor && agentDock.active;
 
     useLayoutEffect(() => {
         // Ant Design 浮层挂载在 body，必须用路由级标记隔离用户工作台与画布编辑器、运营后台。
@@ -56,9 +61,14 @@ export default function UserLayout({ children }: { children: ReactNode }) {
             dropdown={productWorkspace ? { classNames: { root: "workspace-quiet-popup" } } : undefined}
             popover={productWorkspace ? { classNames: { root: "workspace-quiet-popup" } } : undefined}
         >
-            <div className={cn("app-user-workspace h-dvh overflow-hidden text-foreground", spatialWorkbench && "app-spatial-workspace", productWorkspace && "app-product-workspace")}>
+            <div
+                className={cn("app-user-workspace h-dvh overflow-hidden text-foreground", spatialWorkbench && "app-spatial-workspace", productWorkspace && "app-product-workspace")}
+                style={agentDocked ? { paddingRight: agentDock.width } : undefined}
+                data-agent-docked={agentDocked || undefined}
+            >
                 <AppWorkspaceShell>{children}</AppWorkspaceShell>
             </div>
+            <YoruWidget />
             {globalAgent}
         </ConfigProvider>
     );

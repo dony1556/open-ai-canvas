@@ -33,11 +33,24 @@ type Settings struct {
 // MaxEpisodeSeconds 是单集时长上限（20 分钟）；更长的内容应拆成多集。
 const MaxEpisodeSeconds = 1200
 
+// AspectRatios 是作品可选的画幅，第一个是未填写时的默认值。
+var AspectRatios = []string{"9:16", "16:9", "1:1", "3:4", "4:3"}
+
+// ValidAspectRatio 判断是否是作品可选的画幅；入口处校验，不把未知值悄悄改成默认画幅。
+func ValidAspectRatio(ratio string) bool {
+	for _, value := range AspectRatios {
+		if value == ratio {
+			return true
+		}
+	}
+	return false
+}
+
 func (s Settings) Normalized() Settings {
 	s.Assets = s.Assets.Normalized()
 	s.Storyboard = s.Storyboard.Normalized()
 	if s.AspectRatio == "" {
-		s.AspectRatio = "9:16"
+		s.AspectRatio = AspectRatios[0]
 	}
 	if s.EpisodeSeconds <= 0 {
 		s.EpisodeSeconds = 90
@@ -55,11 +68,6 @@ func (s Settings) Normalized() Settings {
 	s.StylePrompt = truncateRunes(strings.TrimSpace(s.StylePrompt), 1200)
 	s.StyleName = truncateRunes(strings.TrimSpace(s.StyleName), 60)
 	s.Language = truncateRunes(strings.TrimSpace(s.Language), 30)
-	switch s.AspectRatio {
-	case "9:16", "16:9", "1:1", "3:4", "4:3":
-	default:
-		s.AspectRatio = "9:16"
-	}
 	return s
 }
 
@@ -70,18 +78,30 @@ func BibleSystemPrompt() string {
 	return "你是资深短剧总编剧与美术指导。你阅读网络小说，为改编竖屏短剧建立“作品圣经”。" + jsonOnly
 }
 
-// BiblePrompt 基于抽样后的全书文本建立角色、场景与整体风格。
-func BiblePrompt(title string, settings Settings, chapters []Chapter, maxChars int) string {
+// structuredSkillBlock 把写作技能交给输出 JSON 的步骤：技能决定取舍、粒度与写法，输出结构仍以本步骤的 JSON 为准，
+// 否则后续解析会失败。
+func structuredSkillBlock(step string, skill *WritingSkill) string {
+	if skill == nil || strings.TrimSpace(skill.Content) == "" {
+		return ""
+	}
+	return fmt.Sprintf("【写作技能：%s】\n下面是%s必须遵循的方法与标准（来自技能文件 %s）。按技能决定取舍、粒度与写法；输出仍然只能是下面要求的 JSON，字段名与结构不变，技能与 JSON 结构冲突时以 JSON 结构为准，技能里要求的其他输出格式不要输出。\n<skill>\n%s\n</skill>\n\n", skill.Name, step, skill.Path, truncateRunes(strings.TrimSpace(skill.Content), MaxWritingSkillRunes))
+}
+
+// BiblePrompt 基于抽样后的全书文本建立角色、场景与整体风格；skill 不为空时按技能的方法提取。
+func BiblePrompt(title string, settings Settings, chapters []Chapter, maxChars int, skill *WritingSkill) string {
 	settings = settings.Normalized()
 	var b strings.Builder
 	fmt.Fprintf(&b, "作品：%s\n画幅：%s\n视觉风格：%s\n对白语言：%s\n章节总数：%d\n\n", title, settings.AspectRatio, firstNonEmpty(settings.StylePrompt, "写实电影感"), settings.Language, len(chapters))
+	b.WriteString(structuredSkillBlock("提取角色、道具与场景", skill))
 	b.WriteString("请输出：\n")
 	b.WriteString(`{"logline":"一句话卖点","tone":"整体基调","visualRules":"统一的画面规则（色调/光线/服化道年代）",` +
 		`"characters":[{"name":"标准名","aliases":["别名/称呼"],"role":"主角/反派/配角","gender":"男/女","age":"年龄段",` +
-		`"description":"性格与身份","appearance":"可直接用于生图的外貌、发型、服装描述（中文，40-80字）","voice":"音色、语速与说话方式"}],` +
+		`"description":"性格与身份","appearance":"第一次登场时可直接用于生图的外貌、发型、服装描述（中文，40-80字）","voice":"音色、语速与说话方式",` +
+		`"looks":[{"name":"造型名（如 外门弟子、内门弟子、霸道总裁）","appearance":"这套造型完整的外貌、发型、服装与妆容（中文，40-80字）","fromChapter":起始章节序号,"toChapter":结束章节序号}]}],` +
 		`"props":[{"name":"道具名","description":"用途与归属","appearance":"可直接用于生图的外形、材质、颜色描述"}],` +
 		`"scenes":[{"name":"场景名","description":"用途","appearance":"可直接用于生图的环境描述"}]}` + "\n")
-	b.WriteString("要求：角色按重要性排序，最多 24 个，只保留会在镜头中出现的人物；同一人物的不同称呼必须合并到 aliases；道具最多 20 个，只保留反复出现或推动剧情的关键物件；场景最多 16 个，只保留反复出现的地点。\n\n")
+	b.WriteString("要求：角色按重要性排序，最多 24 个，只保留会在镜头中出现的人物；同一人物的不同称呼必须合并到 aliases；道具最多 20 个，只保留反复出现或推动剧情的关键物件；场景最多 16 个，只保留反复出现的地点。\n")
+	fmt.Fprintf(&b, "造型：同一角色在不同时期、身份或场合的服装与妆造明显不同时（如修仙者从散修到外门弟子、内门弟子、长老；都市人物的学生时代、刚工作、成为总裁），appearance 写第一次登场的造型，其余造型按时间顺序写进 looks，每个角色最多 %d 套；同一人物的五官、脸型与体态在各套造型里保持一致，只写服装、发型与妆容的变化。fromChapter / toChapter 用原文抽样里方括号中的章节序号，不确定的一端写 0；造型没有明显变化的角色 looks 给空数组。\n\n", MaxCharacterLooks)
 	b.WriteString("【小说原文抽样】\n")
 	b.WriteString(SampleNovel(chapters, maxChars))
 	return b.String()
@@ -98,7 +118,7 @@ func SampleNovel(chapters []Chapter, maxChars int) string {
 	used := 0
 	next := 0
 	for ; next < len(chapters) && used < headBudget; next++ {
-		chunk := "## " + chapters[next].Title + "\n" + chapters[next].Text + "\n\n"
+		chunk := chapterHeading(chapters[next], "") + chapters[next].Text + "\n\n"
 		if remaining := headBudget - used; utf8.RuneCountInString(chunk) > remaining {
 			chunk = truncateRunes(chunk, remaining) + "\n\n"
 		}
@@ -120,9 +140,17 @@ func SampleNovel(chapters []Chapter, maxChars int) string {
 	}
 	for i := 0; i < samples; i++ {
 		chapter := rest[i*len(rest)/samples]
-		b.WriteString("## " + chapter.Title + "（节选）\n" + truncateRunes(chapter.Text, per) + "\n\n")
+		b.WriteString(chapterHeading(chapter, "（节选）") + truncateRunes(chapter.Text, per) + "\n\n")
 	}
 	return b.String()
+}
+
+// chapterHeading 是抽样里的章节标题，方括号里是原著章节序号，供模型标注造型适用的章节范围。
+func chapterHeading(chapter Chapter, suffix string) string {
+	if chapter.Index > 0 {
+		return fmt.Sprintf("## [%d] %s%s\n", chapter.Index, chapter.Title, suffix)
+	}
+	return "## " + chapter.Title + suffix + "\n"
 }
 
 func PlanSystemPrompt() string {
@@ -201,6 +229,8 @@ type ScriptContext struct {
 	SourceChapters []Chapter
 	// SourceFormat 是本集素材类型，决定是改编、按剧本拆镜还是转录分镜。
 	SourceFormat string
+	// Skill 是分镜拆分的写作技能，为空按内置规则。
+	Skill *WritingSkill
 }
 
 func ScriptPrompt(ctx ScriptContext) string {
@@ -211,6 +241,7 @@ func ScriptPrompt(ctx ScriptContext) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "作品：%s\n第 %d 集《%s》\n画幅：%s · 单集约 %d 秒 · 对白语言：%s\n视觉风格：%s\n画面规则：%s\n\n", ctx.Title, ctx.EpisodeNumber, ctx.EpisodeTitle, settings.AspectRatio, settings.EpisodeSeconds, settings.Language, firstNonEmpty(settings.StylePrompt, "写实电影感"), firstNonEmpty(ctx.VisualRules, "保持全剧统一"))
 	fmt.Fprintf(&b, "本集大纲：%s\n开场钩子：%s\n结尾悬念：%s\n\n", firstNonEmpty(ctx.Synopsis, "以原文为准"), firstNonEmpty(ctx.Hook, "以原文为准"), firstNonEmpty(ctx.Cliffhanger, "以原文为准"))
+	b.WriteString(structuredSkillBlock("拆分镜头", ctx.Skill))
 	b.WriteString(sourceFormatRules(format))
 	b.WriteString("【角色表】（name 必须从这里选；新出现的人物用其原文称呼）\n" + firstNonEmpty(ctx.CastSummary, "无") + "\n")
 	b.WriteString("【道具表】（props 从这里选；新出现的关键道具用原文称呼）\n" + firstNonEmpty(ctx.PropSummary, "无") + "\n")
@@ -223,11 +254,12 @@ func ScriptPrompt(ctx ScriptContext) string {
 	default:
 		fmt.Fprintf(&b, "输出约 %d 个镜头：\n", shotTarget)
 	}
-	b.WriteString(`{"shots":[{"scene":"场景名","characters":["出镜角色名"],"props":["画面中出现的关键道具名"],"speaker":"说话人（旁白写“旁白”，无台词留空）",` +
+	b.WriteString(`{"shots":[{"scene":"场景名","characters":["出镜角色名"],"looks":{"出镜角色名":"本镜造型名（角色表列了造型的角色才写）"},"props":["画面中出现的关键道具名"],"speaker":"说话人（旁白写“旁白”，无台词留空）",` +
 		`"dialogue":"本镜台词，逐字摘自原文（无则空）","action":"画面里发生的动作","shotSize":"特写/近景/中景/全景/远景",` +
 		`"camera":"固定/推/拉/摇/跟/环绕","durationSeconds":4,"transition":"cut/fadeblack/fadewhite","imagePrompt":"本镜起幅画面：人物站位与朝向、动作、表情、构图、光线、环境",` +
 		`"videoPrompt":"本镜头时长内的动作与镜头运动描述，按时间顺序写清起止","sourceQuote":"对应原文的一小句"}],` +
-		`"cast":[{"kind":"character/prop/scene","name":"上面三张表里没有、本集新出现的角色/道具/场景","appearance":"可直接用于生图的外貌服装或外形环境描述（原文未写明的按身份合理补全）","voice":"角色的音色与说话方式（道具、场景留空）"}]}` + "\n")
+		`"cast":[{"kind":"character/prop/scene/look","name":"上面三张表里没有、本集新出现的角色/道具/场景（kind=look 时写角色名）","look":"kind=look 时写新造型名","appearance":"可直接用于生图的外貌服装或外形环境描述（原文未写明的按身份合理补全）","voice":"角色的音色与说话方式（道具、场景、造型留空）"}]}` + "\n")
+	b.WriteString("造型规则：角色表里列了造型的角色，每个镜头在 looks 里写明本镜用哪套造型（值是该角色的造型名或“基础造型”）；没写的用标着“本集默认”的造型，没有默认就用基础造型。剧情里换装、回忆、伪装或时间跳跃时按原文换造型；角色本集换上了表里没有的新造型时，在 cast 里用 kind=look 列出（name 写角色名，look 写造型名，appearance 写这套造型完整的外貌、发型、服装与妆容）。\n")
 	b.WriteString(settings.Storyboard.PromptRules(settings.EpisodeSeconds, ctx.Segment))
 	fmt.Fprintf(&b, "台词规则：每个镜头最多一句台词；一句台词超过 %d 字时，在原文标点处拆到同一说话人的连续镜头里，拆开后按顺序拼起来必须与原文一字不差；对话用正反打拆成多个镜头。\n", maxLine)
 	if format == SourceNovel {

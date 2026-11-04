@@ -6,6 +6,7 @@ import { useAdminContext } from "./admin-context";
 import { AdminPageFrame } from "./components/admin-shell";
 import { readAnnouncementPendingReview } from "./components/admin-announcement-safety";
 import { BillingAutoRefundToggle } from "./components/billing-auto-refund-toggle";
+import { AdminSegmented } from "./ui/controls";
 
 const AnalyticsPanel = lazy(() => import("./components/analytics-panel"));
 const AdminAnnouncementsPanel = lazy(() => import("./components/admin-announcements-panel"));
@@ -16,6 +17,7 @@ const EmailSettingsPanel = lazy(() => import("./components/email-settings-panel"
 const FeatureAvailabilityPanel = lazy(() => import("./components/feature-availability-panel"));
 const StorageResourcesPanel = lazy(() => import("./components/storage-resources-panel"));
 const AgentLessonsPanel = lazy(() => import("./components/agent-lessons-panel"));
+const AgentMemoryDocumentsPanel = lazy(() => import("./components/agent-memory-documents-panel"));
 
 export function AnalyticsPage() {
     const { references } = useAdminContext();
@@ -62,11 +64,7 @@ export function BannerAnnouncementsPage() {
             title="常驻通知"
             description="配置首页顶部常驻展示的通知，支持标题、状态与有效期"
             actions={
-                <Button
-                    type="primary"
-                    icon={<Plus className="size-4" />}
-                    onClick={() => setCreateOpen(true)}
-                >
+                <Button type="primary" icon={<Plus className="size-4" />} onClick={() => setCreateOpen(true)}>
                     新增常驻通知
                 </Button>
             }
@@ -82,12 +80,12 @@ export function CreditOperationsPage() {
     return (
         <AdminPageFrame
             title="积分运营"
-            description="异常计费核对、积分策略与人工调账"
+            description="异常计费核对、注册与签到赠送管理及人工调账"
             actions={
                 <>
                     <BillingAutoRefundToggle />
                     <Button icon={<Settings2 className="size-4" />} onClick={() => setActiveOperation("policy")}>
-                        积分策略
+                        注册与签到赠送
                     </Button>
                     <Button type="primary" icon={<UserRoundCog className="size-4" />} onClick={() => setActiveOperation("adjustment")}>
                         人工调账
@@ -118,7 +116,7 @@ export function EmailSettingsPage() {
 
 export function FeatureAvailabilityPage() {
     return (
-        <AdminPageFrame title="功能开放" description="按用户使用路径控制工作台、插件与模型能力" scroll>
+        <AdminPageFrame title="功能开放" description="决定前台用户能看到和使用哪些功能" scroll>
             <FeatureAvailabilityPanel />
         </AdminPageFrame>
     );
@@ -126,16 +124,32 @@ export function FeatureAvailabilityPage() {
 
 export function StorageResourcesPage() {
     return (
-        <AdminPageFrame title="存储资源" description="只读查看资源记录、容量分布与文件预览" scroll>
+        <AdminPageFrame title="存储资源" description="查看资源记录、容量分布与文件预览，可删除单个或批量资源" scroll>
             <StorageResourcesPanel />
         </AdminPageFrame>
     );
 }
 
 export function AgentLessonsPage() {
+    const [view, setView] = useState<"documents" | "lessons">("documents");
     return (
-        <AdminPageFrame title="Agent 记忆" description="按用户查看个人记忆；批准仍由用户自己处理" scroll>
-            <AgentLessonsPanel />
+        <AdminPageFrame
+            title="Agent 记忆"
+            description="按用户只读查看记忆文件；编辑、撤销和确认由用户本人处理"
+            actions={
+                <AdminSegmented<"documents" | "lessons">
+                    ariaLabel="记忆视图"
+                    value={view}
+                    onChange={setView}
+                    options={[
+                        { value: "documents", label: "记忆文件" },
+                        { value: "lessons", label: "旧版经验" },
+                    ]}
+                />
+            }
+            scroll
+        >
+            {view === "documents" ? <AgentMemoryDocumentsPanel /> : <AgentLessonsPanel />}
         </AdminPageFrame>
     );
 }

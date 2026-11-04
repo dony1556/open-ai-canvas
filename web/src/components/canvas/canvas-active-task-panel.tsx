@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Clock3, Coins, ListTodo, LoaderCircle, XCircle 
 import { useEffect, useState } from "react";
 
 import { formatCredits } from "@/constant/credits";
+import { taskBillingLabel } from "@/lib/generation-task-billing";
 import { aceternityMotion } from "@/lib/aceternity-motion";
 import { canCancelGenerationTask, formatTaskKind, generationTaskShowsProgress, generationTaskStageLabel, generationTaskStatusLabel } from "@/lib/generation-task-display";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -135,7 +136,7 @@ function ActiveTaskCard({
     const startedAt = task.startedAt || task.createdAt;
     const elapsedMs = Math.max(0, now - parseTime(startedAt));
     const durationLabel = `${task.status === "queued" ? "已等待" : "已运行"} ${formatDuration(elapsedMs)}`;
-    const billingLabel = task.billing ? `冻结 ${formatCredits(task.billing.amountMicrocredits)} 积分` : "未计费";
+    const billingLabel = task.billing ? taskBillingLabel(task.billing) : "未计费";
     const statusTone = task.status === "running" ? theme.accent.primary : theme.node.muted;
     const transition = reducedMotion ? { duration: 0 } : aceternityMotion.spring.panel;
 

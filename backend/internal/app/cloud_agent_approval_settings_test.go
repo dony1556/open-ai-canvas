@@ -299,6 +299,62 @@ func TestCloudAgentVideoApprovalEditsAreValidatedAndApplied(t *testing.T) {
 	}
 }
 
+func TestCloudAgentEditedApprovalValidatesFrozenDependencies(t *testing.T) {
+	for _, change := range []string{"draft_only", "unrelated", "prompt", "reference", "connection"} {
+		t.Run(change, func(t *testing.T) {
+			s, db, args := agentMediaFixture(t)
+			run, _ := agentMediaRun(t, s, args, "request_approval")
+			if err := s.advanceCloudAgentByID("user", run.ID); err != nil {
+				t.Fatal(err)
+			}
+			run, _ = s.repo.CloudAgent("user", run.ID)
+			state, err := cloudAgentDecode(run)
+			if err != nil || state.Approval == nil || state.Approval.Prepared == nil {
+				t.Fatalf("missing prepared approval: %v", err)
+			}
+			canvas, _ := s.repo.CanvasProjectForUser("user", "agent-canvas")
+			doc, _ := creationDocument(canvas.PayloadJSON)
+			nodes, _ := creationObjects(doc["nodes"])
+			switch change {
+			case "unrelated":
+				doc["nodes"] = append(doc["nodes"].([]any), map[string]any{"id": "unrelated", "type": "text", "metadata": map[string]any{"content": "另一个节点"}})
+			case "prompt":
+				nodes[args.NodeID]["metadata"].(map[string]any)["composerContent"] = "changed"
+			case "reference":
+				nodes["cat"]["metadata"].(map[string]any)["storageKey"] = "resource:ref-two"
+			case "connection":
+				doc["connections"] = []any{}
+			}
+			raw, _ := json.Marshal(doc)
+			if err := db.Model(canvas).Update("payload_json", string(raw)).Error; err != nil {
+				t.Fatal(err)
+			}
+			seconds := 8
+			settings := CloudAgentMediaSettings{ChannelID: args.ChannelID, ChannelModelKey: args.ChannelModelKey, Size: args.Size, Quality: args.Quality, DurationSeconds: &seconds, VideoGenerateAudio: args.VideoGenerateAudio}
+			var beforeOrders int64
+			db.Model(&model.BillingOrder{}).Count(&beforeOrders)
+			err = s.updateCloudAgentMediaApproval(s.repo, run, &state, settings)
+			if change == "draft_only" || change == "unrelated" {
+				if err != nil {
+					t.Fatalf("safe settings edit rejected: %v", err)
+				}
+				var edited cloudAgentMediaArgs
+				if err := json.Unmarshal([]byte(state.Approval.Call.Function.Arguments), &edited); err != nil || edited.Duration != seconds {
+					t.Fatalf("edited duration lost: %v %+v", err, edited)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "画布内容已变化") {
+				t.Fatalf("dependency change must fail closed: %v", err)
+			}
+			var tasks, orders int64
+			db.Model(&model.Task{}).Where("type = ?", "canvas_video").Count(&tasks)
+			db.Model(&model.BillingOrder{}).Count(&orders)
+			if tasks != 0 || orders != beforeOrders {
+				t.Fatalf("repreparation created tasks or billing orders: %d %d", tasks, orders)
+			}
+		})
+	}
+}
+
 func TestCloudAgentConversationKeepsRecentRounds(t *testing.T) {
 	s, db, _, _ := creationTestService(t)
 	if err := db.Create(&model.CanvasProject{ID: "agent-canvas", UserID: "user", PayloadJSON: `{"nodes":[]}`}).Error; err != nil {
