@@ -205,11 +205,16 @@ func TestRepriceTierFieldValidation(t *testing.T) {
 			protocol = model.ChannelInterfaceChatCompletion
 			prices["inputTokenPriceMicrocredits"] = &input
 			prices["cachedTokenPriceMicrocredits"] = &zero
+			prices["cacheWriteTokenPriceMicrocredits"] = &input
 		}
 		if err := applyChannelModelTierPrices(&tier, capability, protocol, prices); err != nil {
 			t.Fatal(err)
 		}
-		if tier.OutputTokenPriceMicrocredits != output || tier.CachedTokenPriceMicrocredits != 0 {
+		wantCacheWrite := int64(0)
+		if capability == "text" {
+			wantCacheWrite = input
+		}
+		if tier.OutputTokenPriceMicrocredits != output || tier.CachedTokenPriceMicrocredits != 0 || tier.CacheWriteTokenPriceMicrocredits != wantCacheWrite {
 			t.Fatalf("tier=%+v", tier)
 		}
 		output = 1_000_000_000_001
@@ -265,7 +270,7 @@ func TestBatchRepricingRollsBackOnConcurrentChange(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := svc.repo.UpdateChannelModelSalePrices("channel", items); !errors.Is(err, repository.ErrChannelModelPriceConflict) {
+			if err := svc.repo.UpdateChannelModelSalePrices(items); !errors.Is(err, repository.ErrChannelModelPriceConflict) {
 				t.Fatalf("error=%v", err)
 			}
 			item, err := svc.repo.ChannelModelByID("channel", "a")

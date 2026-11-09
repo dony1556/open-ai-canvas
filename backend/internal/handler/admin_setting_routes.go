@@ -13,6 +13,60 @@ import (
 )
 
 func registerAdminSettingRoutes(r *gin.RouterGroup, svc *service.Service) {
+	r.GET("/admin/ark-assets", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		var query service.AdminArkAssetQuery
+		if err := c.ShouldBindQuery(&query); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		page, err := svc.AdminArkAssets(c.Request.Context(), user, query)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, page)
+	})
+	r.PATCH("/admin/ark-assets/:id", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		if !enforceRateLimit(c, "admin-ark-write:"+user.ID, 30, time.Minute) {
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+		var req service.AdminArkAssetRenameRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		if err := svc.RenameAdminArkAsset(c.Request.Context(), user, c.Param("id"), req); err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{})
+	})
+	r.DELETE("/admin/ark-assets/:id", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		if !enforceRateLimit(c, "admin-ark-write:"+user.ID, 30, time.Minute) {
+			return
+		}
+		if err := svc.DeleteAdminArkAsset(c.Request.Context(), user, c.Param("id")); err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{})
+	})
 	r.GET("/admin/settings/oss", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

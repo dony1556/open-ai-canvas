@@ -93,16 +93,17 @@ type AdminReferenceData struct {
 }
 
 type ChannelRequest struct {
-	Name                 string           `json:"name"`
-	SortOrder            *int             `json:"sortOrder"`
-	BaseURL              string           `json:"baseUrl"`
-	APIKey               string           `json:"apiKey"`
-	SecretKey            string           `json:"secretKey"`
-	ConcurrencyLimit     *int             `json:"concurrencyLimit"`
-	UseGlobalConcurrency *bool            `json:"useGlobalConcurrency"`
-	Models               []string         `json:"models"`
-	Headers              []OutboundHeader `json:"headers"`
-	Enabled              *bool            `json:"enabled"`
+	MediaTransport       *ReferenceMediaTransport `json:"mediaTransport"`
+	Name                 string                   `json:"name"`
+	SortOrder            *int                     `json:"sortOrder"`
+	BaseURL              string                   `json:"baseUrl"`
+	APIKey               string                   `json:"apiKey"`
+	SecretKey            string                   `json:"secretKey"`
+	ConcurrencyLimit     *int                     `json:"concurrencyLimit"`
+	UseGlobalConcurrency *bool                    `json:"useGlobalConcurrency"`
+	Models               []string                 `json:"models"`
+	Headers              []OutboundHeader         `json:"headers"`
+	Enabled              *bool                    `json:"enabled"`
 	// ProxyURL 指针语义：nil = 请求未提交该字段（更新时保持渠道现有值），
 	// 指向空串 = 显式清空渠道代理。此前用 string 类型导致「删掉代理保存」
 	// 被 mergeChannelRequest 回填旧值，永远清不掉。
@@ -110,6 +111,7 @@ type ChannelRequest struct {
 }
 
 type PublicModelChannel struct {
+	MediaTransport   *ReferenceMediaTransport  `json:"mediaTransport,omitempty"`
 	ID               string                    `json:"id"`
 	UserID           string                    `json:"userId"`
 	Scope            model.ChannelScope        `json:"scope"`
@@ -132,20 +134,21 @@ type PublicModelChannel struct {
 }
 
 type PublicChannelModelPrice struct {
-	Model                        string                     `json:"model"`
-	DisplayName                  string                     `json:"displayName"`
-	ChannelLabel                 string                     `json:"channelLabel"`
-	Tags                         []model.ChannelModelTag    `json:"tags"`
-	Description                  string                     `json:"description"`
-	Icon                         string                     `json:"icon"`
-	Capability                   string                     `json:"capability"`
-	Protocol                     model.ChannelInterfaceType `json:"protocol"`
-	BillingMode                  string                     `json:"billingMode"`
-	UnitPriceMicrocredits        int64                      `json:"unitPriceMicrocredits"`
-	InputTokenPriceMicrocredits  int64                      `json:"inputTokenPriceMicrocredits"`
-	OutputTokenPriceMicrocredits int64                      `json:"outputTokenPriceMicrocredits"`
-	CachedTokenPriceMicrocredits int64                      `json:"cachedTokenPriceMicrocredits"`
-	CapabilityConfig             *ModelCapabilityConfig     `json:"capabilityConfig,omitempty"`
+	Model                            string                     `json:"model"`
+	DisplayName                      string                     `json:"displayName"`
+	ChannelLabel                     string                     `json:"channelLabel"`
+	Tags                             []model.ChannelModelTag    `json:"tags"`
+	Description                      string                     `json:"description"`
+	Icon                             string                     `json:"icon"`
+	Capability                       string                     `json:"capability"`
+	Protocol                         model.ChannelInterfaceType `json:"protocol"`
+	BillingMode                      string                     `json:"billingMode"`
+	UnitPriceMicrocredits            int64                      `json:"unitPriceMicrocredits"`
+	InputTokenPriceMicrocredits      int64                      `json:"inputTokenPriceMicrocredits"`
+	OutputTokenPriceMicrocredits     int64                      `json:"outputTokenPriceMicrocredits"`
+	CachedTokenPriceMicrocredits     int64                      `json:"cachedTokenPriceMicrocredits"`
+	CacheWriteTokenPriceMicrocredits int64                      `json:"cacheWriteTokenPriceMicrocredits"`
+	CapabilityConfig                 *ModelCapabilityConfig     `json:"capabilityConfig,omitempty"`
 }
 
 func channelFromRequest(req ChannelRequest, channel model.ModelChannel) (model.ModelChannel, error) {
@@ -153,6 +156,9 @@ func channelFromRequest(req ChannelRequest, channel model.ModelChannel) (model.M
 }
 
 func (s *Service) channelFromRequest(req ChannelRequest, channel model.ModelChannel) (model.ModelChannel, error) {
+	if _, err := normalizeReferenceMediaTransport(req.MediaTransport); err != nil {
+		return channel, err
+	}
 	name := strings.TrimSpace(req.Name)
 	baseURL := strings.TrimSpace(req.BaseURL)
 	if name == "" {
@@ -251,7 +257,7 @@ func publicChannel(channel model.ModelChannel, admin bool, channelModels []model
 					capabilityConfig = normalized
 				}
 			}
-			modelCosts = append(modelCosts, PublicChannelModelPrice{Model: item.ModelKey, DisplayName: item.DisplayName, ChannelLabel: item.ChannelLabel, Tags: item.Tags, Description: item.Description, Icon: item.Icon, Capability: item.Capability, Protocol: item.Protocol, BillingMode: item.BillingMode, UnitPriceMicrocredits: item.UnitPriceMicrocredits, InputTokenPriceMicrocredits: item.InputTokenPriceMicrocredits, OutputTokenPriceMicrocredits: item.OutputTokenPriceMicrocredits, CachedTokenPriceMicrocredits: item.CachedTokenPriceMicrocredits, CapabilityConfig: capabilityConfig})
+			modelCosts = append(modelCosts, PublicChannelModelPrice{Model: item.ModelKey, DisplayName: item.DisplayName, ChannelLabel: item.ChannelLabel, Tags: item.Tags, Description: item.Description, Icon: item.Icon, Capability: item.Capability, Protocol: item.Protocol, BillingMode: item.BillingMode, UnitPriceMicrocredits: item.UnitPriceMicrocredits, InputTokenPriceMicrocredits: item.InputTokenPriceMicrocredits, OutputTokenPriceMicrocredits: item.OutputTokenPriceMicrocredits, CachedTokenPriceMicrocredits: item.CachedTokenPriceMicrocredits, CacheWriteTokenPriceMicrocredits: item.CacheWriteTokenPriceMicrocredits, CapabilityConfig: capabilityConfig})
 		}
 	}
 	if len(models) == 0 {

@@ -16,6 +16,7 @@ import type { CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { canvasThemes, type CanvasBackgroundMode, type CanvasTheme } from "@/lib/canvas-theme";
 import { defaultToolbarPrefs, readToolbarPrefs, resolveToolbarEntries, type ToolContext, type ToolbarHandlers, type ToolbarPrefs } from "@/lib/canvas/tool-registry";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
+import { useTranslation } from "react-i18next";
 import type { CanvasNodeTypeId, CanvasToolMode, CanvasWorkspaceMode } from "@/types/canvas";
 
 export function CanvasToolbar({
@@ -54,6 +55,7 @@ export function CanvasToolbar({
     onOpenWorkspace,
     onOpenMyAssets,
     onOpenProjectCharacters,
+    onOpenPoseLibrary,
     compact = false,
 }: {
     selectedCount: number;
@@ -91,9 +93,11 @@ export function CanvasToolbar({
     onOpenWorkspace?: () => void;
     onOpenMyAssets: () => void;
     onOpenProjectCharacters: () => void;
+    onOpenPoseLibrary?: () => void;
     /** 紧凑尺寸：短剧精修画布把视野留给节点。 */
     compact?: boolean;
 }) {
+    const { t } = useTranslation();
     const rootRef = useRef<HTMLDivElement>(null);
     const { bringToFront, zIndex } = useCanvasOverlayLayer("main-toolbar", "var(--z-toolbar)");
     const dockRef = useRef<HTMLDivElement>(null);
@@ -158,6 +162,7 @@ export function CanvasToolbar({
         onOpenWorkspace,
     onOpenMyAssets,
         onOpenProjectCharacters,
+        onOpenPoseLibrary,
         onBackgroundModeChange,
         onShowImageInfoChange,
         onToggleAddPanel: (event: ReactMouseEvent<HTMLElement>) => { placePanel(event); setAppearanceOpen(false); setSettingsOpen(false); setAddOpen((value) => !value); },
@@ -198,7 +203,7 @@ export function CanvasToolbar({
     const createCommands = useCanvasCreateCommands(ctx, runAddAction);
 
     return (
-        <div ref={rootRef} data-canvas-no-zoom className="pointer-events-none absolute inset-x-[var(--canvas-inset-x)] bottom-[var(--canvas-inset-y)] flex justify-center" style={{ zIndex }} onPointerDownCapture={bringToFront} onFocusCapture={bringToFront}>
+        <div ref={rootRef} data-canvas-no-zoom className="canvas-main-toolbar pointer-events-none absolute inset-x-[var(--canvas-inset-x)] bottom-[var(--canvas-inset-y)] flex justify-center" style={{ zIndex }} onPointerDownCapture={bringToFront} onFocusCapture={bringToFront}>
             <AnimatePresence>
                 {addOpen ? (
                     <AddNodeMenu
@@ -209,16 +214,17 @@ export function CanvasToolbar({
                 ) : null}
             </AnimatePresence>
 
-            <FloatingDock ref={dockRef} items={items} size={compact ? "compact" : "default"} className="canvas-floating-dock pointer-events-auto max-w-full" style={canvasDockStyle(theme)} />
+            {/* canvas-zoom-controls 按底部同排规则（canvasBottomRowLayout）写入 --canvas-main-toolbar-shift。 */}
+            <FloatingDock ref={dockRef} items={items} size={compact ? "compact" : "default"} className="canvas-floating-dock pointer-events-auto relative left-[var(--canvas-main-toolbar-shift,0px)] max-w-full" style={canvasDockStyle(theme)} />
 
             <AnimatePresence>
                 {appearanceOpen ? (
                     <motion.div initial={{ opacity: 0, scaleY: 0.9, y: 8 }} animate={{ opacity: 1, scaleY: 1, y: 0 }} exit={{ opacity: 0, scaleY: 0.92, y: 6 }} transition={{ duration: aceternityMotion.duration.panel, ease: aceternityMotion.easing.enter }} className="pointer-events-auto absolute bottom-[var(--canvas-dock-popover-offset)] z-[var(--dock-z-popover)] w-[296px] max-w-[calc(100vw-24px)]" style={{ left: panelX || "50%", transformOrigin: "bottom center", x: "-50%" }}>
-                        <SpotlightSurface role="region" aria-label="画布外观" spotlightColor={theme.toolbar.itemHover} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97, transition: { duration: 0 } }} transition={{ duration: aceternityMotion.duration.instant, ease: aceternityMotion.easing.enter }} className="aceternity-floating-panel flex flex-col overflow-hidden rounded-[var(--panel-radius)] border p-2 backdrop-blur-2xl" contentClassName="relative z-[1] min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain thin-scrollbar" data-canvas-wheel-scroll style={{ maxHeight: "calc(100dvh - var(--canvas-inset-y) - var(--canvas-dock-popover-offset) - 12px)", background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.toolbar.item }} onWheel={(event) => event.stopPropagation()}>
-                            <PanelHeading icon={<Palette className="size-4" />} title="画布外观" subtitle="配色与网格" theme={theme} />
+                        <SpotlightSurface role="region" aria-label={t("canvasC.toolbar.appearance")} spotlightColor={theme.toolbar.itemHover} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97, transition: { duration: 0 } }} transition={{ duration: aceternityMotion.duration.instant, ease: aceternityMotion.easing.enter }} className="aceternity-floating-panel flex flex-col overflow-hidden rounded-[var(--panel-radius)] border p-2 backdrop-blur-2xl" contentClassName="relative z-[1] min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain thin-scrollbar" data-canvas-wheel-scroll style={{ maxHeight: "calc(100dvh - var(--canvas-inset-y) - var(--canvas-dock-popover-offset) - 12px)", background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.toolbar.item }} onWheel={(event) => event.stopPropagation()}>
+                            <PanelHeading icon={<Palette className="size-4" />} title={t("canvasC.toolbar.appearance")} subtitle={t("canvasC.toolbar.appearanceSubtitle")} theme={theme} />
                             <CanvasAppearanceControls appearance={appearance} backgroundMode={backgroundMode} colorTheme={colorTheme} theme={theme} onAppearanceChange={onAppearanceChange} onSaveAppearanceDefault={onSaveAppearanceDefault} onBackgroundModeChange={onBackgroundModeChange} />
                             <div className="mt-2 flex items-center justify-between gap-2 rounded-[var(--dock-item-radius-labeled)] border px-2 py-2" style={{ background: theme.spatial.surface, borderColor: theme.toolbar.border }}>
-                                <span className="inline-flex min-w-0 items-center gap-2 text-[var(--fs-caption)] font-semibold"><Info className="size-3" />媒体信息</span>
+                                <span className="inline-flex min-w-0 items-center gap-2 text-[var(--fs-caption)] font-semibold"><Info className="size-3" />{t("canvasC.toolbar.mediaInfo")}</span>
                                 <Switch size="sm" checked={showImageInfo} onChange={onShowImageInfoChange} />
                             </div>
                         </SpotlightSurface>

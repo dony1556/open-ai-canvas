@@ -3,6 +3,7 @@
 package repository
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -191,6 +192,74 @@ func (r *Repository) CreateArkPrivateAssetBinding(binding *model.ArkPrivateAsset
 
 func (r *Repository) SaveArkPrivateAssetBinding(binding *model.ArkPrivateAssetBinding) error {
 	return r.db.Save(binding).Error
+}
+
+func (r *Repository) ArkPrivateAssetBindingsForAsset(assetID, projectName string) ([]model.ArkPrivateAssetBinding, error) {
+	var bindings []model.ArkPrivateAssetBinding
+	err := r.db.Where("ark_asset_id = ? AND project_name = ?", assetID, projectName).Find(&bindings).Error
+	return bindings, err
+}
+
+func (r *Repository) MarkArkPrivateAssetDeleted(assetID, projectName string) error {
+	return r.db.Model(&model.ArkPrivateAssetBinding{}).Where("ark_asset_id = ? AND project_name = ?", assetID, projectName).
+		Updates(map[string]interface{}{"status": "deleted", "error": "", "updated_at": time.Now()}).Error
+}
+
+func (r *Repository) RenameArkPortraitAssetsForArkAsset(assetID, name string) error {
+	return r.db.Model(&model.ArkPortraitAsset{}).Where("ark_asset_id = ?", assetID).
+		Updates(map[string]any{"name": name, "updated_at": time.Now()}).Error
+}
+
+func (r *Repository) ActiveTasksForArkAssetDeletion() ([]model.Task, error) {
+	var tasks []model.Task
+	err := r.db.Select("id", "input_json").Where("status IN ?", []model.TaskStatus{model.TaskStatusQueued, model.TaskStatusRunning}).Find(&tasks).Error
+	return tasks, err
+}
+
+// 原图 resource 引用不占用远端副本；持久化的方舟 ID 引用必须先解除。
+func (r *Repository) ArkAssetPersistentReference(assetID string) (string, error) {
+	var portrait model.ArkPortraitAsset
+	err := r.db.Select("id", "name").Where("ark_asset_id = ?", assetID).First(&portrait).Error
+	if err == nil {
+		return "方舟人像库：" + portrait.Name + "（" + portrait.ID + "）；请使用人像库专用管理入口", nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+	pattern := "%" + assetID + `"%`
+	var canvas model.CanvasProject
+	err = r.db.Select("id", "title").Where("payload_json LIKE ?", pattern).First(&canvas).Error
+	if err == nil {
+		return "画布：" + canvas.Title + "（" + canvas.ID + "）", nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return "", err
+	}
+	var asset model.Asset
+	err = r.db.Select("id", "title").Where("payload_json LIKE ?", pattern).First(&asset).Error
+	if err == nil {
+		return "素材：" + asset.Title + "（" + asset.ID + "）", nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return "", err
+	}
+	var version model.AssetVersion
+	err = r.db.Select("id", "asset_id").Where("definition_json LIKE ?", pattern).First(&version).Error
+	if err == nil {
+		return "素材版本：" + version.ID + "（素材 " + version.AssetID + "）", nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return "", err
+	}
+	var project model.Project
+	err = r.db.Select("id", "name").Where("style_profile_json LIKE ?", pattern).First(&project).Error
+	if err == nil {
+		return "项目：" + project.Name + "（" + project.ID + "）", nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return "", err
+	}
+	return "", nil
 }
 
 func (r *Repository) DeleteSystemSetting(key string) error {

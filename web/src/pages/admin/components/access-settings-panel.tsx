@@ -1,14 +1,21 @@
 import { App, Button, Form, Input, Skeleton } from "antd";
 import { Switch } from "@/pages/admin/ui/controls";
-import { AlertTriangle, BadgeCheck, ChevronDown, FileText, Globe2, KeyRound, LockKeyhole, RefreshCw, RotateCcw, Save, ShieldCheck, UserPlus, UsersRound } from "lucide-react";
+import { AlertTriangle, AppWindow, BadgeCheck, Check, ChevronDown, FileText, Globe2, KeyRound, LockKeyhole, Mail, MailCheck, PanelsTopLeft, RefreshCw, RotateCcw, Save, ShieldCheck, UserPlus, UsersRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBlocker } from "react-router";
 
 import { cn } from "@/lib/utils";
 import { useAppearanceStore } from "@/stores/use-appearance-store";
 import { getAdminLinuxDOSetting, getAdminRegistrationSetting, updateAdminLinuxDOSetting, updateAdminRegistrationSetting, type LinuxDOSetting, type RegistrationSetting } from "@/services/api/wallet";
+import type { AuthLoginMode } from "@/services/api/auth";
+import { useAuthSettingsStore } from "@/stores/use-auth-settings-store";
 import { AdminStatusBadge, configuredSecretText, SettingsSectionCard } from "./admin-ui";
 import { Select } from "@/components/ui/base/select";
+
+const LOGIN_MODES: Array<{ mode: AuthLoginMode; label: string; description: string; short: string }> = [
+    { mode: "modal", label: "弹窗登录（默认）", description: "在当前页面弹出登录框，登录后留在原页面继续操作；直达 /login 的链接也会改为弹窗。", short: "左侧品牌介绍 + 右侧登录表单" },
+    { mode: "page", label: "独立页面", description: "跳转到 /login 独立页面完成登录与注册，左侧展示外观设置中的登录页影片。", short: "整页品牌影片 + 登录卡片" },
+];
 
 const DEFAULT_AGREEMENT_TEMPLATE = `一、服务说明与接受
 欢迎使用本平台提供的 AI 影视与内容创作服务。在注册或使用本平台各项功能前，请务必仔细阅读并理解本协议。当您勾选同意或点击注册、登录按钮，即表示您已自愿接受本协议所有条款的约束。
@@ -40,6 +47,8 @@ export default function AccessSettingsPanel() {
     const [savingLinuxDO, setSavingLinuxDO] = useState(false);
     const [savingRegistration, setSavingRegistration] = useState(false);
     const [savingAgreement, setSavingAgreement] = useState(false);
+    const [savingLoginMode, setSavingLoginMode] = useState(false);
+    const [savingEmailPolicy, setSavingEmailPolicy] = useState<"" | "emailRequired" | "emailVerificationRequired">("");
     const [dirty, setDirty] = useState(false);
     const [draftLinuxDOEnabled, setDraftLinuxDOEnabled] = useState(false);
     const [agreementTitle, setAgreementTitle] = useState("");
@@ -218,6 +227,40 @@ export default function AccessSettingsPanel() {
         void toggleRegistration(enabled).catch(() => undefined);
     };
 
+    // 邮箱要求与注册开关同属 registration 配置：只提交本次切换的字段，其余由服务端保留。
+    const changeEmailPolicy = async (field: "emailRequired" | "emailVerificationRequired", value: boolean) => {
+        if (!registration || savingEmailPolicy) return;
+        setSavingEmailPolicy(field);
+        try {
+            const data = await updateAdminRegistrationSetting({ enabled: registration.enabled, [field]: value });
+            setRegistration(data.setting);
+            void useAuthSettingsStore.getState().load({ maxAgeMs: 0 });
+            message.success(field === "emailRequired" ? (value ? "注册时必须填写邮箱" : "注册时邮箱改为选填") : value ? "注册需先通过验证码" : "注册不再要求验证码");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "更新邮箱要求失败");
+        } finally {
+            setSavingEmailPolicy("");
+        }
+    };
+
+    // 打开方式与注册开关同属 registration 配置：只提交 enabled 与 loginMode，协议正文由服务端保留。
+    const changeLoginMode = async (loginMode: AuthLoginMode) => {
+        if (!registration || savingLoginMode || loginMode === (registration.loginMode ?? "modal")) return;
+        setSavingLoginMode(true);
+        try {
+            const data = await updateAdminRegistrationSetting({ enabled: registration.enabled, loginMode });
+            if ((data.setting.loginMode ?? "modal") !== loginMode) throw new Error("服务端返回的登录打开方式与本次保存不一致，请刷新后核对");
+            setRegistration(data.setting);
+            // 当前标签页的登录入口立即使用新方式；其他已打开的页面在下次读取配置时生效。
+            void useAuthSettingsStore.getState().load({ maxAgeMs: 0 });
+            message.success(loginMode === "modal" ? "已切换为弹窗登录" : "已切换为独立页面登录");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "更新登录打开方式失败");
+        } finally {
+            setSavingLoginMode(false);
+        }
+    };
+
     const saveLinuxDO = async (values: LinuxDOFormValues) => {
         const expected = normalizeLinuxDOFormValues(values);
         setSavingLinuxDO(true);
@@ -303,7 +346,11 @@ export default function AccessSettingsPanel() {
                     </span>
                     <div>
                         <strong>{dirty ? "Linux.do 有未保存的调整" : "登录与注册设置"}</strong>
-                        <p>{dirty ? "完成接入信息后保存生效。" : `新用户注册${registration.enabled ? "已开放" : "已关闭"} · Linux.do ${linuxdo.enabled ? "已启用" : "未启用"}`}</p>
+                        <p>
+                            {dirty
+                                ? "完成接入信息后保存生效。"
+                                : `新用户注册${registration.enabled ? "已开放" : "已关闭"} · Linux.do ${linuxdo.enabled ? "已启用" : "未启用"} · ${(registration.loginMode ?? "modal") === "page" ? "独立页面登录" : "弹窗登录"}`}
+                        </p>
                     </div>
                 </div>
                 <div className="admin-access-command-actions">
@@ -312,7 +359,7 @@ export default function AccessSettingsPanel() {
                             撤销调整
                         </Button>
                     ) : null}
-                    <Button icon={<RefreshCw className="size-4" />} loading={refreshing} disabled={savingLinuxDO || savingRegistration} onClick={requestRefresh}>
+                    <Button icon={<RefreshCw className="size-4" />} loading={refreshing} disabled={savingLinuxDO || savingRegistration || savingLoginMode} onClick={requestRefresh}>
                         刷新状态
                     </Button>
                 </div>
@@ -346,6 +393,44 @@ export default function AccessSettingsPanel() {
                             <span>{formatSettingTime(registration.updatedAt, "当前来自部署环境默认值")}</span>
                         </div>
                         <Switch checked={registration.enabled} loading={savingRegistration} disabled={loading || refreshing || savingLinuxDO} onChange={requestRegistrationChange} aria-label="允许创建新账号，切换后立即生效" />
+                    </div>
+                    <div className="admin-access-registration-policy">
+                        <span className="admin-access-policy-icon">
+                            <Mail className="size-5" aria-hidden="true" />
+                        </span>
+                        <div className="admin-access-policy-copy">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <strong>注册必须填写邮箱</strong>
+                                <AdminStatusBadge label="切换即保存" tone="info" />
+                            </div>
+                            <p>关闭时邮箱选填，用户可只用用户名注册，之后在账号设置中绑定邮箱。用邮箱作账号登录时始终会保存邮箱。</p>
+                        </div>
+                        <Switch
+                            checked={Boolean(registration.emailRequired)}
+                            loading={savingEmailPolicy === "emailRequired"}
+                            disabled={loading || refreshing || Boolean(savingEmailPolicy)}
+                            onChange={(value) => void changeEmailPolicy("emailRequired", value)}
+                            aria-label="注册必须填写邮箱，切换后立即生效"
+                        />
+                    </div>
+                    <div className="admin-access-registration-policy">
+                        <span className="admin-access-policy-icon">
+                            <MailCheck className="size-5" aria-hidden="true" />
+                        </span>
+                        <div className="admin-access-policy-copy">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <strong>注册必须通过验证码</strong>
+                                <AdminStatusBadge label="切换即保存" tone="info" />
+                            </div>
+                            <p>开启时按登录注册策略验证邮箱或手机号（需先配置邮件服务）。关闭后填写的邮箱标记为“未验证”，不能用于邮箱验证码登录，用户可在账号设置中验证。注意：未验证邮箱同样会占用该地址，真实邮箱主人无法再用它注册。</p>
+                        </div>
+                        <Switch
+                            checked={registration.emailVerificationRequired !== false}
+                            loading={savingEmailPolicy === "emailVerificationRequired"}
+                            disabled={loading || refreshing || Boolean(savingEmailPolicy)}
+                            onChange={(value) => void changeEmailPolicy("emailVerificationRequired", value)}
+                            aria-label="注册必须通过验证码，切换后立即生效"
+                        />
                     </div>
                 </SettingsSectionCard>
             </div>
@@ -511,11 +596,7 @@ export default function AccessSettingsPanel() {
                     }
                 >
                     <Form layout="vertical" requiredMark={false} disabled={loading || refreshing || savingAgreement}>
-                        <Form.Item
-                            label="协议名称"
-                            extra={`留空时自动跟随品牌名生成，即《${brandName}服务协议》。此处只需填名称本身，书名号由注册页补充。`}
-                            className="admin-access-agreement-title-field"
-                        >
+                        <Form.Item label="协议名称" extra={`留空时自动跟随品牌名生成，即《${brandName}服务协议》。此处只需填名称本身，书名号由注册页补充。`} className="admin-access-agreement-title-field">
                             <Input
                                 value={agreementTitle}
                                 maxLength={60}
@@ -526,11 +607,7 @@ export default function AccessSettingsPanel() {
                                 }}
                             />
                         </Form.Item>
-                        <Form.Item
-                            label="协议条款内容"
-                            extra="支持多段落文本，按空行分段展示；留空时注册页弹窗显示“服务协议内容待补充”。"
-                            className="admin-access-agreement-content-field"
-                        >
+                        <Form.Item label="协议条款内容" extra="支持多段落文本，按空行分段展示；留空时注册页弹窗显示“服务协议内容待补充”。" className="admin-access-agreement-content-field">
                             <Input.TextArea
                                 value={agreementContent}
                                 maxLength={20000}
@@ -548,9 +625,7 @@ export default function AccessSettingsPanel() {
                                 <span>没有准备条款时，可先填入通用模板再按需修改。</span>
                             </div>
                             <div className="admin-access-agreement-template-actions">
-                                <span className="admin-access-agreement-metric">
-                                    {agreementContent.trim() ? `${agreementParagraphsCount} 段 · ${agreementContent.length} 字` : "尚未填写条款"}
-                                </span>
+                                <span className="admin-access-agreement-metric">{agreementContent.trim() ? `${agreementParagraphsCount} 段 · ${agreementContent.length} 字` : "尚未填写条款"}</span>
                                 <Button
                                     size="small"
                                     disabled={savingAgreement || loading || refreshing}
@@ -578,6 +653,52 @@ export default function AccessSettingsPanel() {
                             </div>
                         </div>
                     </Form>
+                </SettingsSectionCard>
+            </div>
+
+            <div id="admin-access-login-mode" className="admin-settings-anchor">
+                <SettingsSectionCard
+                    className="admin-access-section admin-access-login-mode-section"
+                    icon={<AppWindow className="size-4" aria-hidden="true" />}
+                    title="4. 登录与注册的打开方式"
+                    description="决定用户点击「登录」或访问需要登录的页面时，登录与注册界面以弹窗还是独立页面呈现。"
+                    status={<AdminStatusBadge label="切换即保存" tone="info" />}
+                >
+                    <div className="admin-storage-mode-content">
+                        <div className="admin-storage-mode-grid" role="radiogroup" aria-label="登录与注册的打开方式">
+                            {LOGIN_MODES.map((item) => {
+                                const selected = (registration.loginMode ?? "modal") === item.mode;
+                                return (
+                                    <button
+                                        key={item.mode}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={selected}
+                                        className={cn("admin-storage-mode-choice", selected && "is-selected")}
+                                        disabled={loading || refreshing || savingLoginMode}
+                                        onClick={() => void changeLoginMode(item.mode)}
+                                    >
+                                        <span className="admin-storage-mode-icon">{item.mode === "modal" ? <AppWindow className="size-4" aria-hidden="true" /> : <PanelsTopLeft className="size-4" aria-hidden="true" />}</span>
+                                        <span className="admin-storage-mode-copy">
+                                            <strong>{item.label}</strong>
+                                            <small>{item.description}</small>
+                                        </span>
+                                        <span className="admin-storage-mode-meta">{item.short}</span>
+                                        {selected ? (
+                                            <span className="admin-storage-mode-selected">
+                                                <Check className="size-3.5" aria-hidden="true" />
+                                                当前方式
+                                            </span>
+                                        ) : null}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <div className="admin-storage-history-note">
+                            <ShieldCheck className="size-4" aria-hidden="true" />
+                            <span>两种方式使用同一套登录、注册与找回密码流程，Linux.do 回跳和推广链接 /register?ref= 均可用。需要保留未发送内容的入口（如首页创作输入框）始终使用弹窗。</span>
+                        </div>
+                    </div>
                 </SettingsSectionCard>
             </div>
         </div>

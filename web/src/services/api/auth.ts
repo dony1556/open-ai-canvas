@@ -100,6 +100,7 @@ export type ApiCallLog = {
     inputTokens: number;
     outputTokens: number;
     cachedTokens: number;
+    cacheWriteTokens?: number;
     usageAvailable: boolean;
     mediaCount: number;
     mediaPreviewUrl?: string;
@@ -325,7 +326,24 @@ export type AdminOSSSetting = {
 };
 
 export type AdminArkPrivateAssetSetting = {
+    /** Seedance 可信参考素材自动同步。 */
     enabled: boolean;
+    /** 开放用户自建真人 / 虚拟素材组，与可信素材自动同步相互独立。 */
+    realEnabled: boolean;
+    virtualEnabled: boolean;
+    realGroupLimit: number;
+    virtualGroupLimit: number;
+    /** 按组一次性收费；平台积分功能关闭时不生效。 */
+    billingEnabled: boolean;
+    realGroupPriceMicrocredits: number;
+    virtualGroupPriceMicrocredits: number;
+    realReviewRequired: boolean;
+    virtualReviewRequired: boolean;
+    realAuthorizationDays: number;
+    /** 方舟站点：火山引擎或 BytePlus 海外站，决定控制面域名。 */
+    site: "volcengine" | "byteplus";
+    /** 真人认证回调使用的站点公网根地址；为空时后端使用 CANVAS_PUBLIC_BASE_URL。 */
+    callbackBaseUrl: string;
     region: string;
     projectName: string;
     accessKeyId: string;
@@ -409,20 +427,28 @@ export type RuntimePolicySetting = {
     updatedAt?: string;
 };
 
+/** 登录注册打开方式：modal 在当前页面弹窗，page 跳转独立的 /login 页面。 */
+export type AuthLoginMode = "modal" | "page";
+
+export type AuthSettings = VerificationPolicy & {
+    firstUser: boolean;
+    registrationEnabled: boolean;
+    linuxdoEnabled: boolean;
+    emailEnabled: boolean;
+    emailCodeRequired: boolean;
+    /** 注册必须填写邮箱。旧服务端未返回时按选填处理。 */
+    emailRequired?: boolean;
+    /** 注册必须先通过验证码。旧服务端未返回时按必须处理。 */
+    emailVerificationRequired?: boolean;
+    smsBindingAvailable: boolean;
+    emailBindingAvailable: boolean;
+    agreementTitle?: string;
+    agreementContent?: string;
+    loginMode: AuthLoginMode;
+};
+
 export function getAuthSettings() {
-    return http.get<
-        VerificationPolicy & {
-            firstUser: boolean;
-            registrationEnabled: boolean;
-            linuxdoEnabled: boolean;
-            emailEnabled: boolean;
-            emailCodeRequired: boolean;
-            smsBindingAvailable: boolean;
-            emailBindingAvailable: boolean;
-            agreementTitle?: string;
-            agreementContent?: string;
-        }
-    >("/auth/settings");
+    return http.get<AuthSettings>("/auth/settings");
 }
 
 export function linuxDOLoginURL(next: string, acceptedTerms?: boolean) {
@@ -476,14 +502,14 @@ export function updateAdminFeatureAvailability(
             | "videoWorkbenchEnabled"
             | "ecommerceEnabled"
             | "ecommerceVideoEnabled"
-            | "siteAssistantEnabled"
         >
     >,
 ) {
     return http.patch<{ features: FeatureAvailability }>("/admin/settings/features", features);
 }
 
-export async function login(input: { username: string; password: string }) {
+/** autoRegister：一体表单在账号不存在且允许注册时收到 reason=account_not_registered，而不是“密码不正确”。 */
+export async function login(input: { username: string; password: string; autoRegister?: boolean }) {
     const result = await http.post<{ user: LocalUser }>("/auth/login", input);
     // 登录会改变服务端会话身份，不能让登录前缓存的游客 session 污染后续恢复。
     invalidateAuthSessionCache();

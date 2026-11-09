@@ -55,6 +55,23 @@ func TestParseBibleDeduplicatesNames(t *testing.T) {
 	}
 }
 
+func TestParseBibleDoesNotDuplicateBaseLook(t *testing.T) {
+	raw := `{"characters":[{"name":"主角","gender":"男","age":"青年","appearance":"黑发，白衣。","looks":[
+		{"name":"初始造型","appearance":"初次登场的白衣少年"},
+		{"name":"日常","appearance":" 黑发 白衣 "},
+		{"name":"初登场","appearance":"男，青年，黑发白衣"},
+		{"name":"夜行","appearance":"黑色夜行衣，蒙面","fromChapter":5},
+		{"name":"潜行","appearance":"黑色夜行衣 蒙面"}
+	]},{"name":"配角","appearance":"红衣","looks":[]}]}`
+	bible, err := ParseBible(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bible.Characters[0].Looks) != 1 || bible.Characters[0].Looks[0].Name != "夜行" || len(bible.Characters[1].Looks) != 0 {
+		t.Fatalf("only an actual costume change should create another look: %+v", bible.Characters)
+	}
+}
+
 func TestParseScriptDropsEmptyShotsAndClearsSpeaker(t *testing.T) {
 	raw := `{"shots":[{"action":"他抬头","speaker":"萧炎","dialogue":""},{"speaker":"x"}]}`
 	shots, err := ParseScript(raw)
@@ -325,6 +342,57 @@ func TestSegmentShotsForVideoRebalancesShortTrailingSegment(t *testing.T) {
 	auto := SegmentShotsForVideo([]string{"a", "a", "b", "b"}, []int64{4000, 4000, 2000, 1000}, SegmentLimits{Mode: SegmentAuto, MinMs: 4000, MaxMs: 10000})
 	if len(auto) != 2 || auto[0] != (Segment{Start: 0, End: 1, Title: "a"}) || auto[1] != (Segment{Start: 1, End: 4, Title: "a / b"}) {
 		t.Fatalf("auto mode must rebalance to the model minimum: %+v", auto)
+	}
+}
+
+func TestStripFrameDirectivesRemovesWorkFrameRules(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		unwanted []string
+		wanted   []string
+	}{
+		{"真人实拍质感，竖屏构图主体突出。横版构图，主体完整。9:16竖屏构图，冷灰蓝色调；16:9画幅比例。", []string{"竖屏", "横版", "9:16", "16:9", "画幅"}, []string{"真人实拍质感", "主体突出", "主体完整", "冷灰蓝色调"}},
+		{"9:16 竖屏，人物居中", []string{"9:16", "竖屏"}, []string{"人物居中"}},
+		{"画面比例为 9：16，冷色调；竖向构图", []string{"9：16", "比例", "竖向"}, []string{"冷色调"}},
+		// 不是画幅要求的文字不动：短剧题材、相机画幅、时间。
+		{"竖屏短剧风格，全画幅相机质感，12:30 的暖光", []string{"竖屏"}, []string{"短剧风格", "全画幅相机质感", "12:30 的暖光"}},
+	} {
+		got := StripFrameDirectives(tc.in)
+		for _, item := range tc.unwanted {
+			if strings.Contains(got, item) {
+				t.Fatalf("StripFrameDirectives(%q) = %q, still contains %q", tc.in, got, item)
+			}
+		}
+		for _, item := range tc.wanted {
+			if !strings.Contains(got, item) {
+				t.Fatalf("StripFrameDirectives(%q) = %q, lost %q", tc.in, got, item)
+			}
+		}
+		if strings.HasPrefix(got, "，") || strings.Contains(got, "，，") || strings.Contains(got, "。。") {
+			t.Fatalf("StripFrameDirectives(%q) left dangling punctuation: %q", tc.in, got)
+		}
+	}
+	if got := StripFrameDirectives("9:16竖屏构图"); got != "" {
+		t.Fatalf("a rule made only of frame directives must become empty, got %q", got)
+	}
+	if got := WithAssetRatio("横版构图，人物完整。", "9:16"); !strings.Contains(got, "最终输出画幅必须为 9:16，竖版，高度大于宽度") {
+		t.Fatalf("portrait ratio was not appended: %s", got)
+	}
+	if got := WithAssetRatio("道具设定图", "16:9"); !strings.HasSuffix(got, "最终输出画幅必须为 16:9，横版，宽度大于高度；不得改成其他比例。") {
+		t.Fatalf("landscape ratio was not appended: %s", got)
+	}
+}
+
+// 设定和方案模板里的文字不经过画幅清理：角色设定里的“1:1 比例复刻”“竖向条纹”原样发给模型。
+func TestCastImagePromptKeepsCastDescription(t *testing.T) {
+	prompt := CastImagePrompt(AssetSettings{Mode: AssetModePortrait}, "prop", "城堡模型", "按 1:1 比例复刻的城堡模型，竖向条纹底座", StripFrameDirectives("写实，9:16 竖屏构图"), StripFrameDirectives("冷色调；竖屏"))
+	for _, wanted := range []string{"按 1:1 比例复刻的城堡模型", "竖向条纹底座", "横版构图", "写实", "冷色调"} {
+		if !strings.Contains(prompt, wanted) {
+			t.Fatalf("cast prompt lost %q: %s", wanted, prompt)
+		}
+	}
+	if strings.Contains(prompt, "9:16") || strings.Contains(prompt, "竖屏") {
+		t.Fatalf("work frame rules leaked into the asset prompt: %s", prompt)
 	}
 }
 

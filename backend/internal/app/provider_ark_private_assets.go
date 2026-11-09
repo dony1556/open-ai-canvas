@@ -18,13 +18,14 @@ import (
 )
 
 const (
-	arkPrivateAssetAPIVersion = "2024-01-01"
-	arkPrivateAssetGroupType  = "AIGC"
-	arkPrivateAssetStatusNew  = "creating"
-	arkPrivateAssetStatusWait = "processing"
-	arkPrivateAssetStatusLive = "active"
-	arkPrivateAssetStatusFail = "failed"
-	arkPrivateAssetPollLimit  = 3 * time.Minute
+	arkPrivateAssetAPIVersion    = "2024-01-01"
+	arkPrivateAssetGroupType     = "AIGC"
+	arkPrivateAssetStatusNew     = "creating"
+	arkPrivateAssetStatusWait    = "processing"
+	arkPrivateAssetStatusLive    = "active"
+	arkPrivateAssetStatusFail    = "failed"
+	arkPrivateAssetStatusDeleted = "deleted"
+	arkPrivateAssetPollLimit     = 3 * time.Minute
 )
 
 // 测试可以注入本地控制面服务；生产环境必须根据管理员显式配置的 Region 推导方舟控制面地址，
@@ -48,7 +49,7 @@ func withoutProviderAnalytics(ctx context.Context) context.Context {
 
 func (s *Service) prepareArkPrivateAssetReferences(ctx context.Context, userID string, input *canvasGenerationInput) error {
 	// 可信素材 asset:// 仅方舟视频协议支持；Agent Plan Seedream 等图片渠道不能上传或改写。
-	if input == nil || input.Mode != "video" || !isArkPrivateAssetVideoConfig(input.Config) || !parseBool(input.Config.ArkPrivateAssetUpload, true) {
+	if input == nil || input.Mode != "video" || !isArkPrivateAssetVideoConfig(input.Config) {
 		return nil
 	}
 	hasOwnedReference := false
@@ -65,14 +66,13 @@ func (s *Service) prepareArkPrivateAssetReferences(ctx context.Context, userID s
 	if err != nil {
 		return err
 	}
-	automaticSyncEnabled, err := arkPrivateAssetAutomaticSyncEnabled(setting)
+	automaticSetting := setting
+	automaticSetting.Enabled = setting.Enabled && parseBool(input.Config.ArkPrivateAssetUpload, true)
+	automaticSyncEnabled, err := arkPrivateAssetAutomaticSyncEnabled(automaticSetting)
 	if err != nil {
 		return err
 	}
-	if !automaticSyncEnabled {
-		return nil
-	}
-	if taskID := taskExecutionID(ctx); taskID != "" {
+	if taskID := taskExecutionID(ctx); automaticSyncEnabled && taskID != "" {
 		_ = s.repo.UpdateTaskProgress(taskID, "正在准备参考素材", 0)
 	}
 	for index := range input.ReferenceImages {
@@ -94,6 +94,23 @@ func (s *Service) prepareArkPrivateAssetReferences(ctx context.Context, userID s
 		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resource.MimeType)), "image/") {
 			return errors.New("方舟可信素材库当前只支持上传图片参考素材")
 		}
+		binding, err := s.repo.ArkPrivateAssetBinding(resourceID, setting.ProjectName)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		// 管理员删除的素材不自动重新入库；用户仍可显式手动上传。
+		if binding != nil && binding.Status == arkPrivateAssetStatusDeleted {
+			continue
+		}
+		// 开关只控制新素材入库，手动预上传成功的素材始终可以复用。
+		if binding != nil && binding.Status == arkPrivateAssetStatusLive && binding.ArkAssetID != "" {
+			reference.URL = "asset://" + binding.ArkAssetID
+			reference.DataURL = ""
+			continue
+		}
+		if !automaticSyncEnabled {
+			continue
+		}
 		assetID, err := s.ensureArkPrivateAsset(ctx, userID, resource, settingRecord, &setting)
 		if err != nil {
 			return err
@@ -101,7 +118,7 @@ func (s *Service) prepareArkPrivateAssetReferences(ctx context.Context, userID s
 		reference.URL = "asset://" + assetID
 		reference.DataURL = ""
 	}
-	if taskID := taskExecutionID(ctx); taskID != "" {
+	if taskID := taskExecutionID(ctx); automaticSyncEnabled && taskID != "" {
 		_ = s.repo.UpdateTaskProgress(taskID, "作品创作中", 0)
 	}
 	return nil
@@ -117,8 +134,7 @@ func isArkPrivateAssetVideoConfig(config providerConfig) bool {
 }
 
 func arkPrivateAssetAutomaticSyncEnabled(setting arkPrivateAssetSettingValue) (bool, error) {
-	// 可信素材同步是可选增强能力。管理员未启用时保持原始参考 URL，
-	// 继续执行常规火山方舟视频请求。
+	// 自动入库是可选增强能力；关闭后仍可复用已有可用绑定。
 	if !setting.Enabled {
 		return false, nil
 	}
@@ -164,8 +180,8 @@ func (s *Service) SyncResourceToArkPrivateAsset(ctx context.Context, actor *mode
 	if err != nil {
 		return nil, err
 	}
-	if !setting.Enabled || setting.AccessKeyID == "" || setting.AccessKeySecret == "" {
-		return nil, BadAuthRequest("方舟可信素材库尚未配置，请由管理员在方舟素材库设置中填写启用的 IAM AK/SK")
+	if err := validateArkPrivateAssetCredentials(setting); err != nil {
+		return nil, err
 	}
 	if _, err := s.ensureArkPrivateAsset(ctx, actor.ID, resource, settingRecord, &setting); err != nil {
 		return nil, err
@@ -186,8 +202,12 @@ func (s *Service) ensureArkPrivateAsset(ctx context.Context, userID string, reso
 			}
 			return s.waitForArkPrivateAsset(ctx, binding, setting)
 		}
-		if !shouldRetryArkPrivateAssetBinding(binding) {
+		if !shouldRetryArkPrivateAssetBinding(binding) && binding.Status != arkPrivateAssetStatusDeleted {
 			return s.waitForArkPrivateAsset(ctx, binding, setting)
+		}
+		if binding.Status == arkPrivateAssetStatusDeleted {
+			binding.ArkAssetID = ""
+			binding.AssetGroupID = ""
 		}
 		// 早期字段解析未识别方舟返回的 Id。仅重试尚未创建素材或素材组的记录，
 		// 审核拒绝等真实业务失败仍保持终态，避免重复上传。
@@ -317,6 +337,8 @@ func (s *Service) waitForArkPrivateAsset(ctx context.Context, binding *model.Ark
 			return binding.ArkAssetID, nil
 		case arkPrivateAssetStatusFail:
 			return "", fmt.Errorf("方舟可信素材审核失败：%s", defaultString(binding.Error, "请更换拥有使用权的虚拟人物素材后重试"))
+		case arkPrivateAssetStatusDeleted:
+			return "", errors.New("方舟素材已被管理员删除，请手动重新上传")
 		}
 		if binding.ArkAssetID != "" {
 			response, err := callArkPrivateAssetAPI(ctx, *setting, "GetAsset", map[string]interface{}{
@@ -376,7 +398,7 @@ func callArkPrivateAssetAPI(ctx context.Context, setting arkPrivateAssetSettingV
 	if err != nil {
 		return nil, err
 	}
-	baseURL, err := arkPrivateAssetControlPlaneURL(setting.Region)
+	baseURL, err := arkPrivateAssetControlPlaneURL(setting.Site, setting.Region)
 	if err != nil {
 		return nil, err
 	}
@@ -441,9 +463,20 @@ func arkPrivateAssetUpstreamDetail(response map[string]interface{}) string {
 	return detail
 }
 
-func arkPrivateAssetControlPlaneURL(region string) (string, error) {
+// arkPrivateAssetControlPlaneURL 按站点和 Region 推导方舟控制面（OpenAPI）地址：
+// 火山引擎为 ark.<region>.volcengineapi.com，BytePlus 海外站为 ark.<region>.byteplusapi.com。
+// 两个站点使用相同的 HMAC-SHA256 签名与 2024-01-01 接口版本。
+func arkPrivateAssetControlPlaneURL(site, region string) (string, error) {
 	if override := strings.TrimSpace(arkPrivateAssetAPIBaseURLOverride); override != "" {
 		return override, nil
+	}
+	host := "volcengineapi.com"
+	switch strings.ToLower(strings.TrimSpace(site)) {
+	case "", arkSiteVolcengine:
+	case arkSiteBytePlus:
+		host = "byteplusapi.com"
+	default:
+		return "", errors.New("方舟站点无效")
 	}
 	region = strings.ToLower(strings.TrimSpace(region))
 	if region == "" {
@@ -454,7 +487,7 @@ func arkPrivateAssetControlPlaneURL(region string) (string, error) {
 			return "", errors.New("方舟素材库 Region 格式无效")
 		}
 	}
-	return "https://ark." + region + ".volcengineapi.com", nil
+	return "https://ark." + region + "." + host, nil
 }
 
 func arkPrivateAssetResponseField(response map[string]interface{}, keys ...string) string {

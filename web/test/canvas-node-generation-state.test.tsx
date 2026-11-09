@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
 
 import { CanvasNode } from "../src/components/canvas/canvas-node";
 import { canvasNodeCanResyncTask } from "../src/lib/canvas/canvas-task-state";
+import { subscribeTaskTicker } from "../src/lib/canvas/task-ticker";
 import { CanvasNodeType, type CanvasNodeData } from "../src/types/canvas";
 
 const noop = () => {};
 const createdAt = () => new Date(Date.now() - 103_000).toISOString();
+// 服务端渲染读取的是共享时钟的快照，只有被订阅时才会走动；整套测试里该模块可能早已加载，
+// 渲染前先让它走一下，否则“已用时”会按模块加载时刻计算，测试结果取决于前面跑了多久。
+const refreshTaskTicker = () => subscribeTaskTicker(() => {})();
 
-function renderNode(metadata: CanvasNodeData["metadata"], type: CanvasNodeData["type"] = CanvasNodeType.Image) {
+function renderNode(metadata: CanvasNodeData["metadata"], type: CanvasNodeData["type"] = CanvasNodeType.Image, renderNodeContent?: (node: CanvasNodeData) => ReactNode) {
+    refreshTaskTicker();
     return renderToStaticMarkup(
         <CanvasNode
             data={{ id: "node", type, title: "去掉水印", position: { x: 0, y: 0 }, width: 240, height: 420, metadata }}
@@ -29,6 +35,7 @@ function renderNode(metadata: CanvasNodeData["metadata"], type: CanvasNodeData["
             onOpenTaskDetails={noop}
             onRetry={noop}
             onReloadResource={noop}
+            renderNodeContent={renderNodeContent}
         />,
     );
 }
@@ -36,6 +43,15 @@ function renderNode(metadata: CanvasNodeData["metadata"], type: CanvasNodeData["
 const occurrences = (markup: string, text: string) => markup.split(text).length - 1;
 
 describe("画布节点生成中", () => {
+    test("分镜自定义标题栏已有任务状态时不叠加外层徽章，缺少渲染器时仍显示通用状态", () => {
+        for (const status of ["loading", "error"] as const) {
+            const markup = renderNode({ status }, CanvasNodeType.Script, () => <div>分镜脚本任务状态</div>);
+            expect(markup).toContain("分镜脚本任务状态");
+            expect(markup).not.toContain("canvas-node-status-chip");
+            expect(renderNode({ status }, CanvasNodeType.Script)).toContain(status === "loading" ? "canvas-gen" : "重新生成");
+        }
+    });
+
     test("保存阶段只说一次正在保存，不再重复后端阶段原文，也不叠加“生成中”徽章", () => {
         const markup = renderNode({ status: "loading", taskId: "3897c08303cb-task", taskStatus: "running", taskStage: "作品已生成，正在保存", taskMediaStage: "upload", taskCreatedAt: createdAt() });
         expect(markup).toContain('data-phase="saving"');

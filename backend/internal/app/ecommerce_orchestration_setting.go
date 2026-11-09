@@ -12,17 +12,21 @@ import (
 const ecommerceOrchestrationSettingKey = "ecommerce_agent_orchestration_v1"
 
 // The stage configuration is the administrator's only ecommerce Agent model
-// choice. Every /ecommerce page and canvas node resolves its analysis models
-// from it (see EcommerceAgentSetting). The legacy Enabled flag stays false.
+// choice. The /ecommerce page resolves its two analysis models from it (see
+// EcommerceAgentSetting): Vision recognises the product and proposes the four
+// directions; Director writes the copy, storyboard and image prompts. Marketing
+// is the older name of the planning stage: Director may still reuse it, and a
+// planning model saved there keeps working. The legacy Enabled flag stays false.
 type EcommerceOrchestrationModel struct {
 	ChannelModelID string `json:"channelModelId,omitempty"`
 	LogicalModelID string `json:"logicalModelId,omitempty"`
 }
 
 type EcommerceOrchestrationRole struct {
-	Model    EcommerceOrchestrationModel `json:"model"`
-	Fallback EcommerceOrchestrationModel `json:"fallback"`
-	Reuse    string                      `json:"reuse,omitempty"`
+	Model         EcommerceOrchestrationModel `json:"model"`
+	Fallback      EcommerceOrchestrationModel `json:"fallback"`
+	Reuse         string                      `json:"reuse,omitempty"`
+	ThinkingLevel string                      `json:"thinkingLevel,omitempty"`
 }
 
 type EcommerceOrchestrationSetting struct {
@@ -31,7 +35,6 @@ type EcommerceOrchestrationSetting struct {
 	Vision    EcommerceOrchestrationRole `json:"vision"`
 	Marketing EcommerceOrchestrationRole `json:"marketing"`
 	Director  EcommerceOrchestrationRole `json:"director"`
-	Quality   EcommerceOrchestrationRole `json:"quality"`
 }
 
 func (s *Service) EcommerceOrchestrationSetting(actor *model.User) (EcommerceOrchestrationSetting, error) {
@@ -74,7 +77,7 @@ func (s *Service) UpdateEcommerceOrchestrationSetting(actor *model.User, setting
 		return EcommerceOrchestrationSetting{}, err
 	}
 	// The workbench sends the product images to the recognition task and to the
-	// planning task (视觉设计总监, or the marketing model it reuses), so every
+	// planning task (Director, or the Marketing model it reuses), so every
 	// stage that can run must read images.
 	roles := []struct {
 		name   string
@@ -82,11 +85,14 @@ func (s *Service) UpdateEcommerceOrchestrationSetting(actor *model.User, setting
 		reuse  string
 		vision bool
 	}{
-		{"商品视觉理解", &setting.Vision, "", true}, {"营销策划与文案", &setting.Marketing, "", true},
-		{"视觉设计总监", &setting.Director, "marketing", true}, {"视觉质检", &setting.Quality, "vision", true},
+		{"商品识别与视觉方向", &setting.Vision, "", true}, {"整套策划", &setting.Marketing, "", true},
+		{"整套策划", &setting.Director, "marketing", true},
 	}
 	for _, item := range roles {
 		role := item.role
+		if err := ValidateThinkingLevelRequest(role.ThinkingLevel); err != nil {
+			return EcommerceOrchestrationSetting{}, BadAuthRequest(item.name + "的思考等级无效")
+		}
 		if role.Reuse != "" {
 			if role.Reuse != item.reuse || !emptyOrchestrationModel(role.Model) || !emptyOrchestrationModel(role.Fallback) {
 				return EcommerceOrchestrationSetting{}, BadAuthRequest(item.name + "的复用配置无效")
@@ -120,16 +126,13 @@ func (s *Service) UpdateEcommerceOrchestrationSetting(actor *model.User, setting
 		}
 	}
 	if emptyOrchestrationModel(setting.Vision.Model) {
-		return EcommerceOrchestrationSetting{}, BadAuthRequest("请选择商品视觉理解主模型")
+		return EcommerceOrchestrationSetting{}, BadAuthRequest("请选择商品识别与视觉方向主模型")
 	}
 	if emptyOrchestrationModel(setting.Marketing.Model) && (setting.Director.Reuse == "marketing" || emptyOrchestrationModel(setting.Director.Model)) {
-		return EcommerceOrchestrationSetting{}, BadAuthRequest("请选择营销策划与文案或视觉设计总监主模型")
+		return EcommerceOrchestrationSetting{}, BadAuthRequest("请选择整套策划主模型")
 	}
 	if setting.Director.Reuse == "marketing" && emptyOrchestrationModel(setting.Marketing.Model) {
-		return EcommerceOrchestrationSetting{}, BadAuthRequest("视觉设计总监复用前须先选择营销策划与文案模型")
-	}
-	if setting.Quality.Reuse == "vision" && emptyOrchestrationModel(setting.Vision.Model) {
-		return EcommerceOrchestrationSetting{}, BadAuthRequest("视觉质检复用前须先选择商品视觉理解模型")
+		return EcommerceOrchestrationSetting{}, BadAuthRequest("整套策划复用的模型已清空，请重新选择整套策划主模型")
 	}
 	encoded, err := json.Marshal(setting)
 	if err != nil {

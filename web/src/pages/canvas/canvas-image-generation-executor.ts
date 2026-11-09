@@ -1,9 +1,10 @@
+import { translate } from "@/i18n";
 import { nanoid } from "nanoid";
 
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
 import { canGenerateImageInPlace, findAvailableGenerationGroupPosition, imageGenerationChildPosition, imageGenerationGroupSize } from "@/lib/canvas/canvas-generation-layout";
 import { cancelIncompleteImageBatch, hasImageBatchResult, reconcileImageBatchRoot, retireImageBatchChildren } from "@/lib/canvas/canvas-image-batch-retry";
-import { buildImageGenerationNodeTitle } from "@/lib/canvas/canvas-generation-title";
+import { buildImageGenerationNodeTitle, manualNodeTitle } from "@/lib/canvas/canvas-generation-title";
 import { fitImageNodeSize, imageNodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { canvasImageReferenceLimitError, buildImageGenerationMetadata, getGenerationCount, isGenerationCanceled, resetGenerationTaskMetadata, runCanvasGenerationTaskToConsumer } from "@/lib/canvas/canvas-project-generation";
 import { imageGenerationReferenceConnections } from "@/lib/canvas/canvas-resource-references";
@@ -104,11 +105,13 @@ export async function executeImageGeneration(
         y: parentPosition.y + parentHeight / 2 - rootHeight / 2,
     };
     const rootPosition = reuseSourceNode ? parentPosition : findAvailableGenerationGroupPosition(workingNodes, preferredPosition, imageGenerationGroupSize({ width: rootWidth, height: rootHeight }, outputNodeSize, childIds.length));
+    // 原位重新生成沿用用户起的名称，同批子图按「名称 · 序号」命名；新建的结果组仍按提示词命名。
+    const keptTitle = reuseSourceNode ? manualNodeTitle(sourceNode) : undefined;
 
     const rootNode: CanvasNodeData = {
         id: rootId,
         type: CanvasNodeType.Image,
-        title: buildImageGenerationNodeTitle(effectivePrompt, sourceNode),
+        title: keptTitle ?? buildImageGenerationNodeTitle(effectivePrompt, sourceNode),
         position: rootPosition,
         width: rootWidth,
         height: rootHeight,
@@ -145,7 +148,7 @@ export async function executeImageGeneration(
     const childNodes: CanvasNodeData[] = childIds.map((id, index) => ({
         id,
         type: CanvasNodeType.Image,
-        title: buildImageGenerationNodeTitle(effectivePrompt, sourceNode, index, count),
+        title: keptTitle ? `${keptTitle} · ${index + 1}` : buildImageGenerationNodeTitle(effectivePrompt, sourceNode, index, count),
         position: imageGenerationChildPosition(rootNode.position, rootNode.width, outputNodeSize, index),
         width: outputNodeSize.width,
         height: outputNodeSize.height,
@@ -179,7 +182,7 @@ export async function executeImageGeneration(
             return {
                 ...node,
                 type: CanvasNodeType.Text,
-                title: prompt.slice(0, 32) || "Prompt",
+                title: manualNodeTitle(node) ?? (prompt.slice(0, 32) || "Prompt"),
                 width: parentConfig.width,
                 height: parentConfig.height,
                 metadata: { ...node.metadata, content: prompt, richText: undefined, prompt, composerContent: prompt, status: NODE_STATUS_SUCCESS, fontSize: 14, errorDetails: undefined },
@@ -309,7 +312,7 @@ export async function executeImageGeneration(
         });
         return;
     }
-    if (hasFailure) showError(hasSuccess ? "部分图片生成失败" : "全部图片生成失败");
+    if (hasFailure) showError(hasSuccess ? translate("canvasPage.generation.someImagesFailed") : translate("canvasPage.generation.allImagesFailed"));
     setNodes((current) => {
         const next = current.map((node) => {
             if (node.id === nodeId && isConfigNode) {
@@ -318,7 +321,7 @@ export async function executeImageGeneration(
                     metadata: {
                         ...node.metadata,
                         status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
-                        ...(hasSuccess ? { errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined } : representativeFailure || { errorDetails: "全部图片生成失败" }),
+                        ...(hasSuccess ? { errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined } : representativeFailure || { errorDetails: translate("canvasPage.generation.allImagesFailed") }),
                     },
                 };
             }
@@ -330,7 +333,7 @@ export async function executeImageGeneration(
                         ...node.metadata,
                         status: hasSuccess ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
                         batchFailedCount: count > 1 ? failureCount : undefined,
-                        ...(hasSuccess ? { errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined } : representativeFailure || { errorDetails: "全部图片生成失败" }),
+                        ...(hasSuccess ? { errorDetails: undefined, generationErrorCode: undefined, failedPromptFingerprint: undefined } : representativeFailure || { errorDetails: translate("canvasPage.generation.allImagesFailed") }),
                     },
                 };
             }

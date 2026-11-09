@@ -11,8 +11,6 @@ const (
 )
 
 type (
-	YoruSettings                           = app.YoruSettings
-	YoruChatRequest                        = app.YoruChatRequest
 	SaveEcommerceProjectRequest            = app.SaveEcommerceProjectRequest
 	EcommerceCreativeDirectionsRequest     = app.EcommerceCreativeDirectionsRequest
 	EcommerceStyleChoice                   = app.EcommerceStyleChoice
@@ -103,7 +101,14 @@ type (
 	AppearanceSkinModeTokens               = app.AppearanceSkinModeTokens
 	AppearanceSkinTheme                    = app.AppearanceSkinTheme
 	AppearanceSkinTokens                   = app.AppearanceSkinTokens
+	AdminArkGroupCreateRequest             = app.AdminArkGroupCreateRequest
+	AdminArkGroupQuery                     = app.AdminArkGroupQuery
+	AdminArkGroupUpdateRequest             = app.AdminArkGroupUpdateRequest
+	ArkAssetUploadInput                    = app.ArkAssetUploadInput
+	ArkGroupInput                          = app.ArkGroupInput
 	ArkPrivateAssetSettingRequest          = app.ArkPrivateAssetSettingRequest
+	AdminArkAssetQuery                     = app.AdminArkAssetQuery
+	AdminArkAssetRenameRequest             = app.AdminArkAssetRenameRequest
 	ArkPrivateAssetSyncResult              = app.ArkPrivateAssetSyncResult
 	AssetCandidateInput                    = app.AssetCandidateInput
 	AssetsSyncRequest                      = app.AssetsSyncRequest
@@ -310,6 +315,11 @@ type (
 	RuntimeResourcePolicy                  = app.RuntimeResourcePolicy
 	RuntimeTaskPolicy                      = app.RuntimeTaskPolicy
 	Service                                = app.Service
+	AdminSkillListRequest                  = app.AdminSkillListRequest
+	AdminSkillItem                         = app.AdminSkillItem
+	AdminSkillList                         = app.AdminSkillList
+	AdminSkillInfoRequest                  = app.AdminSkillInfoRequest
+	AdminSkillPackageEditResult            = app.AdminSkillPackageEditResult
 	ShotRevisionInput                      = app.ShotRevisionInput
 	SkillCategory                          = app.SkillCategory
 	SkillLibraryCategory                   = app.SkillLibraryCategory

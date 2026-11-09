@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { App, Button, Skeleton } from "antd";
 import { Switch } from "@/pages/admin/ui/controls";
-import { AlertTriangle, ArrowUpRight, Boxes, Clapperboard, Coins, CornerDownRight, History, ImageIcon, MessageCircleMore, MonitorCog, PlugZap, Quote, RadioTower, RefreshCw, ShieldCheck, ShoppingBag, SlidersHorizontal, Video, Wallet } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Boxes, Clapperboard, Coins, CornerDownRight, History, ImageIcon, MonitorCog, PlugZap, Quote, RadioTower, RefreshCw, ShieldCheck, ShoppingBag, SlidersHorizontal, Video, Wallet } from "lucide-react";
 
 import { Link } from "react-router";
 
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { getAdminFeatureAvailability, updateAdminFeatureAvailability } from "@/services/api/auth";
 import { useUserStore, type FeatureAvailability } from "@/stores/use-user-store";
 import { AdminStatusBadge } from "./admin-ui";
+import { InspirationFeedRow } from "./inspiration-feed-row";
 import "./feature-availability-panel.css";
 
 type FeatureKey =
@@ -23,8 +24,7 @@ type FeatureKey =
     | "imageWorkbenchEnabled"
     | "videoWorkbenchEnabled"
     | "ecommerceEnabled"
-    | "ecommerceVideoEnabled"
-    | "siteAssistantEnabled";
+    | "ecommerceVideoEnabled";
 
 /** 跨分组的依赖：开关本身可以打开，但缺少这一项时功能只部分可用。 */
 type FeatureRequirement = { key: FeatureKey; effect: string };
@@ -60,7 +60,6 @@ const editableFeatureKeys: FeatureKey[] = [
     "videoWorkbenchEnabled",
     "ecommerceEnabled",
     "ecommerceVideoEnabled",
-    "siteAssistantEnabled",
     "frontendModelsEnabled",
     "pluginCenterEnabled",
     "systemPluginsVisibleToUsers",
@@ -174,14 +173,6 @@ const featureGroups: FeatureGroup[] = [
         description: "不影响生成能力的页面元素",
         icon: <SlidersHorizontal className="size-4" aria-hidden="true" />,
         rows: [
-            {
-                key: "siteAssistantEnabled",
-                title: "创作助手",
-                location: "页面右下角",
-                description: "还需在电商 Agent 配置中启用助手并选择模型。",
-                icon: <MessageCircleMore className="size-4" aria-hidden="true" />,
-                link: { to: "/admin/ecommerce/agent", label: "配置创作助手" },
-            },
             {
                 key: "inspirationSourcesVisible",
                 title: "素材来源署名",
@@ -412,6 +403,7 @@ export default function FeatureAvailabilityPanel() {
                                     ))}
                                 </div>
                             ))}
+                            {group.id === "assist" ? <InspirationFeedRow /> : null}
                         </div>
                     </section>
                 );
@@ -540,7 +532,6 @@ function toEditablePayload(features: FeatureAvailability) {
         videoWorkbenchEnabled: features.videoWorkbenchEnabled,
         ecommerceEnabled: features.ecommerceEnabled,
         ecommerceVideoEnabled: features.ecommerceVideoEnabled,
-        siteAssistantEnabled: features.siteAssistantEnabled,
         frontendModelsEnabled: features.frontendModelsEnabled,
         pluginCenterEnabled: features.pluginCenterEnabled,
         systemPluginsVisibleToUsers: features.systemPluginsVisibleToUsers,
@@ -568,7 +559,6 @@ function parseFeatureAvailability(value: unknown): FeatureAvailability {
         videoWorkbenchEnabled: record.videoWorkbenchEnabled as boolean,
         ecommerceEnabled: record.ecommerceEnabled as boolean,
         ecommerceVideoEnabled: record.ecommerceVideoEnabled as boolean,
-        siteAssistantEnabled: record.siteAssistantEnabled as boolean,
         frontendModelsEnabled: record.frontendModelsEnabled as boolean,
         pluginCenterEnabled: record.pluginCenterEnabled as boolean,
         systemPluginsVisibleToUsers: record.systemPluginsVisibleToUsers as boolean,

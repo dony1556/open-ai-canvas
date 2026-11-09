@@ -1,6 +1,7 @@
 import { http } from "@/services/api/request";
 import type { ModelTag } from "@/lib/model-tags";
 import type { ImageResolutionOption } from "@/lib/image-resolution-tiers";
+import type { TokenPriceRule } from "@/services/api/wallet";
 
 export type InputConstraint = { min: number; max: number };
 export type OptionConstraint = { values?: unknown[]; min?: number; max?: number; step?: number };
@@ -25,6 +26,8 @@ export type ModelRequestIntent = {
     operation?: string;
     inputs?: Record<string, number>;
     options?: Record<string, unknown>;
+    /** 仅报价：按顺序给出参考视频时长（毫秒），长度必须等于 inputs.video；真实任务由后端实测。 */
+    referenceVideoDurationsMs?: number[];
 };
 
 export type PublicLogicalModel = {
@@ -41,6 +44,7 @@ export type PublicLogicalModel = {
     inputPriceMicrocredits: number;
     outputPriceMicrocredits: number;
     cachedPriceMicrocredits: number;
+    cacheWritePriceMicrocredits?: number;
     priceTiers: PublicLogicalModelPriceTier[];
     legacyModelIds: string[];
     capabilitySpec: CapabilitySpec;
@@ -58,6 +62,11 @@ export type PublicLogicalModelPriceTier = {
     inputTokenPriceMicrocredits: number;
     outputTokenPriceMicrocredits: number;
     cachedTokenPriceMicrocredits: number;
+    cacheWriteTokenPriceMicrocredits?: number;
+    /** 仅系统渠道直连的文本 Token 档：启用中的分时与上下文规则，单价已换算为当前分组实扣积分。 */
+    tokenPriceRules?: TokenPriceRule[];
+    referenceVideoUnitPriceMicrocredits?: number;
+    referenceVideoOutputTokenPriceMicrocredits?: number;
 };
 
 export type AdminLogicalRoute = {
@@ -112,6 +121,7 @@ export type LogicalModelMutation = {
     inputPriceMicrocredits: number;
     outputPriceMicrocredits: number;
     cachedPriceMicrocredits: number;
+    cacheWritePriceMicrocredits?: number;
     legacyModelIds?: string[];
     capabilitySpec: CapabilitySpec;
     defaultOptions: Record<string, unknown>;
@@ -140,6 +150,17 @@ export type LogicalModelQuote = {
         referenceDurationEstimated: boolean;
         dimensionsEstimated: boolean;
         reservationMarginPercent: number;
+    };
+    /** 仅视频请求挂参考视频时返回的报价构成。 */
+    referenceVideo?: {
+        count: number;
+        /** true：参考视频按带参考视频价格另计费；false：参考视频不计费。 */
+        billed: boolean;
+        generatedSeconds: number;
+        referenceSeconds: number;
+        /** 按秒计费时计入数量的参考视频秒数（向上取整）；Token 计费为 0。 */
+        billedSeconds: number;
+        estimated: boolean;
     };
 };
 
@@ -171,6 +192,8 @@ export type PublicChannelModel = {
     icon: string;
     capability: string;
     protocol?: string;
+    /** 文本模型协议按插件 create 路径识别出的请求格式；插件自定义接口时缺省。 */
+    textWire?: string;
     capabilityConfig?: Record<string, any>;
     priceTiers: PublicChannelModelPriceTier[];
     pricingMode: string;
@@ -178,6 +201,8 @@ export type PublicChannelModel = {
     priceLabel: string;
     available: boolean;
     availability?: PublicChannelModelAvailability;
+    /** 仅视频模型：挂参考视频的请求是否按带参考视频价格另计费。 */
+    referenceVideoBilling?: boolean;
 };
 
 export type PublicChannelModelAvailability = {
@@ -207,6 +232,11 @@ export type PublicChannelModelPriceTier = {
     inputTokenPriceMicrocredits: number;
     outputTokenPriceMicrocredits: number;
     cachedTokenPriceMicrocredits: number;
+    cacheWriteTokenPriceMicrocredits?: number;
+    tokenPriceRules?: TokenPriceRule[];
+    /** 模型开启参考视频计费时发布的带参考视频价格（已按分组换算）。 */
+    referenceVideoUnitPriceMicrocredits?: number;
+    referenceVideoOutputTokenPriceMicrocredits?: number;
 };
 
 export type ModelCatalogResponse = {

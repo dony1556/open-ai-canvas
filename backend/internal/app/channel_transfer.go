@@ -32,6 +32,7 @@ type SystemChannelExport struct {
 }
 
 type SystemChannelExportChannel struct {
+	MediaTransport    *ReferenceMediaTransport   `json:"mediaTransport,omitempty"`
 	Name              string                     `json:"name"`
 	BaseURL           string                     `json:"baseUrl"`
 	SortOrder         int                        `json:"sortOrder"`
@@ -77,8 +78,13 @@ func (s *Service) ExportSystemChannels(actor *model.User, ids []string) (*System
 		if err != nil {
 			return nil, err
 		}
+		transport, err := s.channelMediaTransport(channel.ID)
+		if err != nil {
+			return nil, err
+		}
 		exported := SystemChannelExportChannel{
-			Name: channel.Name, BaseURL: channel.BaseURL, SortOrder: channel.SortOrder, Enabled: channel.Enabled,
+			MediaTransport: transport,
+			Name:           channel.Name, BaseURL: channel.BaseURL, SortOrder: channel.SortOrder, Enabled: channel.Enabled,
 			ConcurrencyLimit: channel.ConcurrencyLimit, CatalogProviderID: channel.CatalogProviderID,
 			Models: make([]SystemChannelExportModel, 0, len(items)),
 		}
@@ -111,10 +117,14 @@ func exportChannelModel(item model.ChannelModel) (SystemChannelExportModel, erro
 			CostPricing: tier.CostPricing, Selector: selector, Resolution: tier.Resolution, VideoSeconds: tier.VideoSeconds,
 			ProviderModelKey: tier.ProviderModelKey, BillingMode: tier.BillingMode, UnitPriceMicrocredits: tier.UnitPriceMicrocredits,
 			InputTokenPriceMicrocredits: tier.InputTokenPriceMicrocredits, OutputTokenPriceMicrocredits: tier.OutputTokenPriceMicrocredits,
-			CachedTokenPriceMicrocredits: tier.CachedTokenPriceMicrocredits, PriceConfigured: tier.PriceConfigured, Enabled: &tierEnabled,
+			CachedTokenPriceMicrocredits: tier.CachedTokenPriceMicrocredits, CacheWriteTokenPriceMicrocredits: tier.CacheWriteTokenPriceMicrocredits,
+			ReferenceVideoUnitPriceMicrocredits:        tier.ReferenceVideoUnitPriceMicrocredits,
+			ReferenceVideoOutputTokenPriceMicrocredits: tier.ReferenceVideoOutputTokenPriceMicrocredits,
+			PriceConfigured: tier.PriceConfigured, Enabled: &tierEnabled,
 		})
 	}
 	priceCurrency := firstNonEmpty(item.PriceCurrency, model.PriceCurrencyCredits)
+	referenceVideoBilling := item.ReferenceVideoBilling
 	return SystemChannelExportModel{
 		SortOrder: item.SortOrder,
 		ChannelModelRequest: ChannelModelRequest{
@@ -122,8 +132,9 @@ func exportChannelModel(item model.ChannelModel) (SystemChannelExportModel, erro
 			Tags: item.Tags, Description: item.Description, Icon: item.Icon, Capability: item.Capability, Protocol: string(item.Protocol),
 			BillingMode: item.BillingMode, UnitPriceMicrocredits: item.UnitPriceMicrocredits, InputTokenPriceMicrocredits: item.InputTokenPriceMicrocredits,
 			OutputTokenPriceMicrocredits: item.OutputTokenPriceMicrocredits, CachedTokenPriceMicrocredits: item.CachedTokenPriceMicrocredits,
-			PriceConfigured: item.PriceConfigured, Enabled: &enabled, CapabilityConfig: capabilityConfig, PriceTiers: tiers,
-			PriceCurrency: &priceCurrency,
+			CacheWriteTokenPriceMicrocredits: item.CacheWriteTokenPriceMicrocredits,
+			PriceConfigured:                  item.PriceConfigured, Enabled: &enabled, CapabilityConfig: capabilityConfig, PriceTiers: tiers,
+			PriceCurrency: &priceCurrency, ReferenceVideoBilling: &referenceVideoBilling,
 		},
 	}, nil
 }
@@ -197,7 +208,7 @@ func (s *Service) ImportSystemChannels(actor *model.User, payload SystemChannelE
 func (s *Service) importSystemChannel(actor *model.User, imported SystemChannelExportChannel, byName map[string]model.ModelChannel) (string, bool, error) {
 	sortOrder := imported.SortOrder
 	useGlobal := imported.ConcurrencyLimit <= 0
-	req := ChannelRequest{Name: strings.TrimSpace(imported.Name), BaseURL: imported.BaseURL, SortOrder: &sortOrder, UseGlobalConcurrency: &useGlobal}
+	req := ChannelRequest{MediaTransport: imported.MediaTransport, Name: strings.TrimSpace(imported.Name), BaseURL: imported.BaseURL, SortOrder: &sortOrder, UseGlobalConcurrency: &useGlobal}
 	if !useGlobal {
 		limit := imported.ConcurrencyLimit
 		req.ConcurrencyLimit = &limit

@@ -6,6 +6,7 @@ import { FlaskConical, Plus } from "lucide-react";
 import { ModelIconPicker } from "@/components/model-logo";
 import { ModelIcon } from "@/components/model-picker";
 import { ModelProtocolBrowser } from "@/components/model-protocol-browser";
+import { MediaTransportFields } from "./media-transport-fields";
 import { ModelCapabilityEditor } from "@/components/model-capability-editor";
 import { defaultModelCapabilityConfig, normalizeModelCapabilityConfig, type ModelCapabilityConfig } from "@/lib/model-capabilities";
 import type { ModelProtocolDefinition } from "@/lib/model-protocols";
@@ -14,6 +15,7 @@ import type { ModelChannel } from "@/stores/use-config-store";
 import { priceCurrencyOptions } from "@/services/api/user-groups";
 import { defaultPriceTier, normalizeUpstreamModelKey, priceTierPayloadFromForm } from "./channel-model-price-tier-form";
 import { PriceTierFields } from "./channel-model-price-tier-fields";
+import { TokenPriceRulesSection } from "./channel-model-token-rules";
 import { ChannelModelTagsEditor } from "./channel-model-tags-editor";
 import {
     changeChannelModelCapability,
@@ -68,6 +70,7 @@ export function ChannelModelEditor({
     const providerModelKey = Form.useWatch("providerModelKey", form) || "";
     const capabilityConfig = Form.useWatch("capabilityConfig", form);
     const modelEnabled = Form.useWatch("enabled", form) !== false;
+    const referenceVideoBilling = Form.useWatch("referenceVideoBilling", form) === true;
     const priceTiers = Form.useWatch("priceTiers", form) || [];
     const hasDefaultPriceTier = priceTiers.some((tier) => tier.matchMode === "default");
     const tiersWithOwnUpstream = priceTiers.filter((tier) => tier.providerModelKey?.trim());
@@ -146,6 +149,7 @@ export function ChannelModelEditor({
                 protocol: values.protocol,
                 priceTiers: values.priceTiers.map((tier) => priceTierPayloadFromForm(values.capability, tier, upstreamModel, capabilityConfig)),
                 priceCurrency: values.priceCurrency || "credits",
+                referenceVideoBilling: values.capability === "video" && values.referenceVideoBilling === true,
                 enabled: values.enabled !== false,
                 capabilityConfig,
             };
@@ -376,6 +380,9 @@ export function ChannelModelEditor({
                                     {modelCapability === "text" || modelCapability === "image" || modelCapability === "video" ? (
                                         <section className="admin-model-editor-section admin-model-editor-section-stacked admin-model-editor-references">
                                             <SectionHeading title="引用与限制" description="按媒体类型纵向配置数量、大小、时长及通用约束。" />
+                                            <Form.Item name={["capabilityConfig", "mediaTransport"]} label="参考素材发送方式" extra="优先使用模型设置，其次渠道默认值，最后使用协议默认行为。">
+                                                <MediaTransportFields channel={channel.mediaTransport || {}} />
+                                            </Form.Item>
                                             <div className="admin-model-editor-section-content">
                                                 <ModelCapabilityEditor
                                                     capability={modelCapability}
@@ -387,7 +394,7 @@ export function ChannelModelEditor({
                                                     value={capabilityConfig}
                                                     onChange={(next) => {
                                                         dirtyRef.current = true;
-                                                        form.setFieldValue("capabilityConfig", next);
+                                                        form.setFieldValue("capabilityConfig", { ...next, mediaTransport: form.getFieldValue(["capabilityConfig", "mediaTransport"]) });
                                                     }}
                                                 />
                                             </div>
@@ -407,7 +414,7 @@ export function ChannelModelEditor({
                                                     value={capabilityConfig}
                                                     onChange={(next) => {
                                                         dirtyRef.current = true;
-                                                        form.setFieldValue("capabilityConfig", next);
+                                                        form.setFieldValue("capabilityConfig", { ...next, mediaTransport: form.getFieldValue(["capabilityConfig", "mediaTransport"]) });
                                                     }}
                                                 />
                                             </div>
@@ -435,12 +442,36 @@ export function ChannelModelEditor({
                                                     }}
                                                 />
                                             </Form.Item>
+                                            {modelCapability === "video" ? (
+                                                <Form.Item
+                                                    name="referenceVideoBilling"
+                                                    label="参考视频计费"
+                                                    valuePropName="checked"
+                                                    extra={
+                                                        referenceVideoBilling
+                                                            ? "已开启：挂参考视频的请求使用各价格档的「带参考视频」价格。按秒 =（生成秒数 + 参考视频秒数）× 带参考视频每秒价，参考视频时长由后端实测，测不出时拒绝提交；视频 Token 按含参考视频的用量 × 带参考视频 Token 价。不挂参考视频的请求仍用原价。"
+                                                            : "已关闭：参考视频不计费。按秒只计生成秒数，视频 Token 只按生成时长计算用量。用户侧会显示「参考视频不计费」。"
+                                                    }
+                                                >
+                                                    <Switch
+                                                        aria-label="参考视频计费"
+                                                        onChange={() => {
+                                                            dirtyRef.current = true;
+                                                        }}
+                                                    />
+                                                </Form.Item>
+                                            ) : null}
                                             <Form.List
                                                 name="priceTiers"
                                                 rules={[
                                                     {
                                                         validator: async (_, value) => {
-                                                            validateChannelModelPrices({ capability: form.getFieldValue("capability"), protocol: form.getFieldValue("protocol"), priceTiers: value });
+                                                            validateChannelModelPrices({
+                                                                capability: form.getFieldValue("capability"),
+                                                                protocol: form.getFieldValue("protocol"),
+                                                                priceTiers: value,
+                                                                referenceVideoBilling: form.getFieldValue("referenceVideoBilling"),
+                                                            });
                                                         },
                                                     },
                                                 ]}
@@ -476,6 +507,14 @@ export function ChannelModelEditor({
                                             </Form.List>
                                         </div>
                                     </section>
+                                    {modelCapability === "text" ? (
+                                        <TokenPriceRulesSection
+                                            form={form}
+                                            onDirty={() => {
+                                                dirtyRef.current = true;
+                                            }}
+                                        />
+                                    ) : null}
                                 </div>
                             ),
                         },

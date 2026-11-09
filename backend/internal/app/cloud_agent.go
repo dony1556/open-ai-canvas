@@ -64,6 +64,9 @@ type CloudAgentRequest struct {
 const cloudAgentMaxStepsLimit = 9999
 const cloudAgentMaxConfirmationRounds = 2
 
+// cloudAgentAskUserMaxFields 让长流程开工前的问卷一次问完，不必拆成多轮确认。
+const cloudAgentAskUserMaxFields = 16
+
 func cloudAgentStepLimit(req CloudAgentRequest) int {
 	if req.Budget.MaxSteps > 0 {
 		return min(req.Budget.MaxSteps, cloudAgentMaxStepsLimit)
@@ -177,7 +180,7 @@ func validateCloudAgentRequest(req *CloudAgentRequest) error {
 			return err
 		}
 	}
-	if req.ReasoningMode != "" && req.ReasoningMode != "off" && req.ReasoningMode != "auto" && req.ReasoningMode != "deep" {
+	if req.ReasoningMode != "" && !validCloudAgentReasoningMode(req.ReasoningMode) {
 		return BadAuthRequest("无效的 Agent 推理模式")
 	}
 	if req.ProfileRevision != "" {
@@ -557,7 +560,7 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 	}
 	canonical.PromptCacheKey = cloudAgentPromptCacheKeyForRequest(req.CanvasID, cloudAgentPromptCacheIdentity(req, policy), canonical.SystemPrompt, canonical.Tools)
 	attachCloudAgentPlan(&canonical, inheritedPlan)
-	input := map[string]any{"mode": "text", "prompt": req.Prompt, "textHistory": history, "textOptions": map[string]any{"stream": true, "thinking": cloudAgentReasoningEnabled(policy.ReasoningMode)}, "cloudAgent": state,
+	input := map[string]any{"mode": "text", "prompt": req.Prompt, "textHistory": history, "textOptions": map[string]any{"stream": true, "thinkingLevel": cloudAgentThinkingLevel(policy.ReasoningMode, false)}, "cloudAgent": state,
 		"agentRequests": map[string]any{"canonical": canonical},
 		"config":        map[string]any{"channelId": req.ChannelID, "channelModelKey": req.ChannelModelKey, "model": firstNonEmpty(req.ChannelModelKey, req.Model), "systemPrompt": system}}
 	input["piSessionJSONL"] = ""

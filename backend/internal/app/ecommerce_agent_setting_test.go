@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -8,13 +9,24 @@ import (
 	"yingce/backend/internal/model"
 )
 
+// Directions tasks read the saved project draft before the model check in
+// every AI_MODE, so the check is only reached with a valid draft.
+func saveEcommerceDirectionsDraft(t *testing.T, db *gorm.DB, project *model.EcommerceProject) {
+	t.Helper()
+	encoded, _ := json.Marshal(EcommerceDraft{ProductName: "蓝色耳机", Platform: "taobao", Language: "zh-CN", Count: 3, ImageType: "main", Ratio: "1:1"})
+	if err := db.Model(project).Update("draft_json", string(encoded)).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEcommerceAgentTaskRejectsStalePlanningModel(t *testing.T) {
 	t.Setenv("AI_MODE", "disabled")
-	svc, _, _, _ := ecommerceCreationTestService(t)
+	svc, db, _, _ := ecommerceCreationTestService(t)
 	project, err := svc.CreateEcommerceProject("user")
 	if err != nil {
 		t.Fatal(err)
 	}
+	saveEcommerceDirectionsDraft(t, db, project)
 	if err := svc.repo.SaveSystemSetting(&model.SystemSetting{Key: ecommerceAgentSettingKey, ValueJSON: `{"logicalModelId":"admin-selected-model"}`}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +104,6 @@ func stageModelSetting() EcommerceOrchestrationSetting {
 		Vision:    EcommerceOrchestrationRole{Model: EcommerceOrchestrationModel{ChannelModelID: "vision-a"}, Fallback: EcommerceOrchestrationModel{ChannelModelID: "fallback-f"}},
 		Marketing: EcommerceOrchestrationRole{Model: EcommerceOrchestrationModel{ChannelModelID: "planner-b"}},
 		Director:  EcommerceOrchestrationRole{Reuse: "marketing"},
-		Quality:   EcommerceOrchestrationRole{Reuse: "vision"},
 	}
 }
 
@@ -107,6 +118,7 @@ func TestEcommerceStageSettingDrivesAgentModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	saveEcommerceDirectionsDraft(t, db, project)
 	if _, err := svc.UpdateEcommerceOrchestrationSetting(admin, stageModelSetting()); err != nil {
 		t.Fatal(err)
 	}
@@ -144,8 +156,7 @@ func TestEcommerceStageSettingRequiresAdminAndVisionModel(t *testing.T) {
 	}
 	missingVision := stageModelSetting()
 	missingVision.Vision = EcommerceOrchestrationRole{}
-	missingVision.Quality = EcommerceOrchestrationRole{}
-	if _, err := svc.UpdateEcommerceOrchestrationSetting(admin, missingVision); err == nil || !strings.Contains(err.Error(), "商品视觉理解主模型") {
+	if _, err := svc.UpdateEcommerceOrchestrationSetting(admin, missingVision); err == nil || !strings.Contains(err.Error(), "商品识别与视觉方向主模型") {
 		t.Fatalf("stage setting without a vision model saved: %v", err)
 	}
 	if _, saved, err := svc.storedEcommerceOrchestrationSetting(); err != nil || saved {

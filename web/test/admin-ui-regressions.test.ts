@@ -86,7 +86,7 @@ test("channel model fetch requires explicit selection before import", async () =
     expect(component).toContain('title="选择要导入的模型"');
     expect(component).toContain("默认勾选已存在的模型，新模型默认不勾选");
     expect(component).toContain("setFetchPreviewOpen(true)");
-    expect(component).toContain("setSelectedFetchModels(selectExistingImportModels(result.models,");
+    expect(component).toMatch(/setSelectedFetchModels\(\s*selectExistingImportModels\(\s*result\.models,/);
     expect(component).toContain("已选择 {selectedFetchModels.length} / {fetchPreviewModels.length} 个模型");
     expect(component).toContain("disabled={importing || !visibleFetchModels.length || allVisibleFetchModelsSelected}");
     expect(component).toContain("onClick={() => setSelectedFetchModels((current) => selectVisibleModels(current, visibleFetchModels))}");
@@ -143,7 +143,7 @@ test("storage settings keep generic S3 controls and connection validation", asyn
     for (const field of ["s3Preset", "sessionToken", "pathStyle", "allowUserS3"]) {
         expect(compacted).toContain(`name="${field}"`);
     }
-    expect(compacted).toContain('["aliyun", "tencent", "qiniu", "s3"].includes(setting.provider || "")');
+    expect(compacted).toContain('["aliyun", "tencent", "qiniu", "volcengine", "s3"].includes(setting.provider || "")');
 });
 
 test("admin navigation keeps the storage resource page reachable", async () => {
@@ -238,9 +238,15 @@ test("task-first settings reveal dependent configuration only after the primary 
     expect(sourceSection(drawingSource, "const selectEngine", "async function save")).not.toContain("save(");
 
     expect(arkSource).toContain('title="1. 配置方舟项目与 IAM 凭据"');
-    expect(arkSource).toContain('title="2. 是否启用可信素材同步"');
+    expect(arkSource).toContain('title="2. 视频生成时自动导入"');
     expect(arkSource).toContain("{prerequisitesReady || draftEnabled ? (");
-    expect(arkSource).toContain('aria-label="启用可信素材同步，保存修改后生效"');
+    expect(arkSource).toContain('aria-label="自动导入可信参考素材，保存修改后生效"');
+    expect(arkSource).toContain('title="5. 已上传素材"');
+
+    expect(arkSource).toContain('title="3. 开放用户素材组"');
+    expect(arkSource).toContain('aria-label="开放真人素材库，保存修改后生效"');
+    expect(arkSource).toContain('aria-label="开放虚拟素材组，保存修改后生效"');
+    expect(arkSource).toContain('title="4. 素材组收费"');
 
     expect(interceptionSource).toContain('title="1. 是否替换用户可见的上游错误"');
     expect(interceptionSource).toContain('title="2. 配置替换规则与优先级"');

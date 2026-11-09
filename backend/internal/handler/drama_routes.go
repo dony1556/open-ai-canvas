@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 
@@ -26,6 +28,20 @@ func dramaRoute(svc *service.Service, bodyLimit int64, fn func(c *gin.Context, u
 			return
 		}
 		ok(c, data)
+	}
+}
+
+// streamDramaArchive 在校验通过后才写响应头；写出中断（用户取消、存储读取失败）只记录日志，响应已开始无法再改状态码。
+func streamDramaArchive(c *gin.Context, svc *service.Service, userID string, archive *service.DramaArchive) {
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": archive.FileName}))
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	c.Writer.Flush()
+	if err := svc.WriteDramaArchive(c.Request.Context(), userID, archive, c.Writer); err != nil {
+		slog.Warn("drama archive download interrupted", "error", err)
 	}
 }
 
@@ -61,13 +77,24 @@ func registerDramaRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		return svc.EstimateDrama(userID, req)
 	}))
-	// 小说正文随创建请求一次提交；600 万字 UTF-8 约 18MB，留出 JSON 转义余量。
-	r.POST("/dramas", dramaRoute(svc, 32<<20, func(c *gin.Context, userID string) (any, error) {
+	// 小说正文随创建请求一次提交；600 万字 UTF-8 约 18MB，留出 JSON 转义余量。保存草稿时还带一份原始正文，上限翻倍。
+	r.POST("/dramas", dramaRoute(svc, 64<<20, func(c *gin.Context, userID string) (any, error) {
 		var req service.CreateDramaRequest
 		if err := bindDramaJSON(c, &req); err != nil {
 			return nil, err
 		}
 		return svc.CreateDrama(userID, req)
+	}))
+	// 草稿：读取创建页表单，或整体替换（start=true 时替换后直接开工）；请求体同创建，另带一份原始正文。
+	r.GET("/dramas/:id/draft", dramaRoute(svc, 0, func(c *gin.Context, userID string) (any, error) {
+		return svc.DramaDraft(userID, c.Param("id"))
+	}))
+	r.PUT("/dramas/:id/draft", dramaRoute(svc, 64<<20, func(c *gin.Context, userID string) (any, error) {
+		var req service.CreateDramaRequest
+		if err := bindDramaJSON(c, &req); err != nil {
+			return nil, err
+		}
+		return svc.SaveDramaDraft(userID, c.Param("id"), req)
 	}))
 	r.DELETE("/dramas/:id", dramaRoute(svc, 0, func(c *gin.Context, userID string) (any, error) {
 		return gin.H{"deleted": true}, svc.DeleteDrama(userID, c.Param("id"))
@@ -140,7 +167,7 @@ func registerDramaRoutes(r *gin.RouterGroup, svc *service.Service) {
 		chapter, err := svc.UpdateDramaChapter(userID, c.Param("id"), c.Param("chapterId"), req)
 		return gin.H{"chapter": chapter}, err
 	}))
-	// 逐集追加：单集原文上限 1.2 万字，UTF-8 加 JSON 转义留足余量。
+	// 逐集追加或插到某一集前后：单集原文上限 1.2 万字，UTF-8 加 JSON 转义留足余量。
 	r.POST("/dramas/:id/episodes", dramaRoute(svc, 1<<20, func(c *gin.Context, userID string) (any, error) {
 		var req service.AddDramaEpisodeRequest
 		if err := bindDramaJSON(c, &req); err != nil {
@@ -150,6 +177,10 @@ func registerDramaRoutes(r *gin.RouterGroup, svc *service.Service) {
 	}))
 	r.GET("/dramas/:id/episodes/:episodeId", dramaRoute(svc, 0, func(c *gin.Context, userID string) (any, error) {
 		return svc.DramaEpisodeDetail(userID, c.Param("id"), c.Param("episodeId"))
+	}))
+	// confirm 是用户输入的确认文字；本集生成过视频时必须是“第 N 集”。
+	r.DELETE("/dramas/:id/episodes/:episodeId", dramaRoute(svc, 0, func(c *gin.Context, userID string) (any, error) {
+		return gin.H{"deleted": true}, svc.DeleteDramaEpisode(userID, c.Param("id"), c.Param("episodeId"), c.Query("confirm"))
 	}))
 	r.PATCH("/dramas/:id/episodes/:episodeId", dramaRoute(svc, 16<<10, func(c *gin.Context, userID string) (any, error) {
 		var req service.UpdateDramaEpisodeRequest
@@ -241,6 +272,37 @@ func registerDramaRoutes(r *gin.RouterGroup, svc *service.Service) {
 		shot, err := svc.InsertDramaShot(userID, c.Param("id"), c.Param("shotId"), req)
 		return gin.H{"shot": shot}, err
 	}))
+	// 导出剪映草稿：表单字段 draftRoot 是用户本机的剪映草稿目录，captions=1 时附带台词字幕轨。
+	// 用表单 POST 而不是 GET，避免本机路径进入访问日志与浏览器历史。
+	r.POST("/dramas/:id/episodes/:episodeId/jianying-draft", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+		archive, err := svc.PrepareDramaJianyingDraft(user.ID, c.Param("id"), c.Param("episodeId"), service.DramaJianyingDraftRequest{DraftRoot: c.PostForm("draftRoot"), Captions: c.PostForm("captions") == "1"})
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		streamDramaArchive(c, svc, user.ID, archive)
+	})
+	// 打包资产：表单字段 episodeId 可重复，media=1 打包媒体文件，prompts=1 打包提示词。
+	r.POST("/dramas/:id/asset-package", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
+		archive, err := svc.PrepareDramaAssetPackage(user.ID, c.Param("id"), service.DramaAssetPackageRequest{EpisodeIDs: c.PostFormArray("episodeId"), Media: c.PostForm("media") == "1", Prompts: c.PostForm("prompts") == "1"})
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		streamDramaArchive(c, svc, user.ID, archive)
+	})
 	r.DELETE("/dramas/:id/shots/:shotId", dramaRoute(svc, 0, func(c *gin.Context, userID string) (any, error) {
 		return gin.H{"deleted": true}, svc.DeleteDramaShot(userID, c.Param("id"), c.Param("shotId"))
 	}))

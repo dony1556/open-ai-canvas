@@ -31,7 +31,89 @@ tags:
     description: 用户反馈与管理员收件箱
   - name: referral
     description: 推广中心：推广码、邀请记录与返佣
+  - name: inspirations
+    description: 灵感大厅上新（定时同步的上游中文提示词）
+  - name: pose-library
+    description: 站点姿势库：浏览、选用，管理员导入与图片同步
 paths:
+  /admin/ark-assets:
+    get:
+      tags: [admin]
+      summary: 查询当前方舟项目素材（管理员）
+      description: 使用服务端 IAM 凭据查询远端素材，关闭自动导入不影响查询。每页最多 20 条，nextToken 缺失或为空表示没有下一页。
+      parameters:
+        - {name: name, in: query, schema: {type: string, maxLength: 64}}
+        - {name: groupId, in: query, schema: {type: string, maxLength: 160}}
+        - {name: groupType, in: query, schema: {type: string, enum: [AIGC, LivenessFace], default: AIGC}}
+        - {name: status, in: query, schema: {type: string, enum: [Active, Processing, Failed]}}
+        - {name: nextToken, in: query, schema: {type: string, maxLength: 8192}}
+      responses:
+        "200":
+          description: 素材列表信封
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: {type: integer, enum: [0]}
+                  msg: {type: string}
+                  data:
+                    type: object
+                    properties:
+                      nextToken: {type: string}
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: {type: string}
+                            name: {type: string}
+                            url: {type: string, description: 有时效的预览地址}
+                            groupId: {type: string}
+                            assetType: {type: string}
+                            status: {type: string}
+                            projectName: {type: string}
+                            createTime: {type: string}
+                            lastInferenceTime: {type: string}
+                            error:
+                              type: object
+                              properties:
+                                code: {type: string}
+                                message: {type: string}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+  /admin/ark-assets/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, maxLength: 160}}
+    patch:
+      tags: [admin]
+      summary: 修改方舟素材名称（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 64}
+      responses:
+        "200": {description: 改名成功，data 为空对象}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+    delete:
+      tags: [admin]
+      summary: 永久删除方舟素材并保留系统原图（管理员）
+      description: 存在已保存的方舟 ID 引用或活跃任务时拒绝。远端删除成功后本地绑定标记 deleted，不自动重新入库，允许画布显式重新上传。
+      responses:
+        "200": {description: 删除成功，data 为空对象}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /admin/ecommerce/skills/install:
     post:
       tags: [admin]
@@ -643,6 +725,186 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "500": { $ref: "#/components/responses/Error" }
+  /pose-library/poses:
+    get:
+      tags: [pose-library]
+      summary: 按姿势分组浏览已启用且已同步的姿势
+      parameters:
+        - { in: query, name: keyword, schema: { type: string } }
+        - { in: query, name: system, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: angle, schema: { type: string } }
+        - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: pageSize, schema: { type: integer, minimum: 1, maximum: 60, default: 24 } }
+      responses:
+        "200": { description: "data 含 poses（每个姿势带 items 视角列表）、total、page、pageSize、facets（systems/categories/angles 计数）；不含来源署名" }
+        "401": { $ref: "#/components/responses/Error" }
+  /pose-library/items/{id}/thumb:
+    get:
+      tags: [pose-library]
+      summary: 读取姿势缩略图（本站数据目录）
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: v, schema: { type: integer }, description: 同步版本号，仅用于缓存失效 }
+      responses:
+        "200": { description: 图片字节，Cache-Control private max-age=604800 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /pose-library/items/{id}/image:
+    get:
+      tags: [pose-library]
+      summary: 读取姿势原图（本站数据目录）
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: v, schema: { type: integer } }
+      responses:
+        "200": { description: 图片字节 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /pose-library/use:
+    post:
+      tags: [pose-library]
+      summary: 把选中的姿势原图复制成当前用户的资源
+      description: 1–16 个条目，按普通上传计入用户每日上传额度与容量；同一用户同一张图重复选用复用已有资源。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, maxItems: 16, items: { type: string } }
+      responses:
+        "200": { description: "data.items 为 [{itemId,name,angle,category,resource}]，顺序与请求一致" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /admin/pose-library/items:
+    get:
+      tags: [pose-library, admin]
+      summary: 姿势库条目、同步统计、来源与按体系汇总（管理员）
+      parameters:
+        - { in: query, name: keyword, schema: { type: string } }
+        - { in: query, name: source, schema: { type: string } }
+        - { in: query, name: system, schema: { type: string } }
+        - { in: query, name: status, schema: { type: string, enum: [pending, ready, failed] } }
+        - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: pageSize, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200": { description: "data 含 items、total、page、pageSize、stats、sources、systems" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [pose-library, admin]
+      summary: 上传一张自建姿势图（管理员）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name]
+              properties:
+                file: { type: string, format: binary, description: JPEG/PNG/WebP，最大 20 MiB }
+                name: { type: string }
+                system: { type: string }
+                category: { type: string }
+                angle: { type: string }
+                code: { type: string, description: 编号相同的图合并为同一姿势的不同视角 }
+      responses:
+        "200": { description: data.item 为新条目 }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /admin/pose-library/import:
+    post:
+      tags: [pose-library, admin]
+      summary: 导入 ai-pose-gallery-zh 的 pose-zh.json 或 yingce-pose-library 姿势包（管理员）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, systems]
+              properties:
+                file: { type: string, format: binary, description: JSON，最大 16 MiB }
+                baseUrl: { type: string, description: 图片来源根地址，相对路径拼在其后 }
+                systems: { type: string, description: JSON 字符串数组，只导入列出的体系 }
+      responses:
+        "200": { description: "data 含 source、format、total、created、updated、skipped、invalid、systems" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /admin/pose-library/sync:
+    post:
+      tags: [pose-library, admin]
+      summary: 下载一批待同步条目的图片到本站数据目录（管理员）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit: { type: integer, minimum: 1, maximum: 40, default: 12 }
+                retryFailed: { type: boolean, description: 先把失败条目放回待同步，只在一轮的第一批传入 }
+      responses:
+        "200": { description: "data 含 processed、succeeded、failed、failures、stats" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /admin/pose-library/items/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string } }
+    patch:
+      tags: [pose-library, admin]
+      summary: 修改姿势条目（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                system: { type: string }
+                category: { type: string }
+                angle: { type: string }
+                code: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "200": { description: data.item 为更新后的条目 }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [pose-library, admin]
+      summary: 删除姿势条目及其图片（管理员）
+      responses:
+        "200": { description: "data={ok:true}" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /admin/pose-library/bulk:
+    post:
+      tags: [pose-library, admin]
+      summary: 按条目或体系批量启用、停用、删除、重新同步（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [enable, disable, delete, resync] }
+                ids: { type: array, maxItems: 1000, items: { type: string } }
+                sourceKey: { type: string }
+                system: { type: string, description: 不传 ids 时必填 }
+      responses:
+        "200": { description: "data={affected}" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
 
   /admin/settings/appearance/live2d:
     post:
@@ -1209,6 +1471,10 @@ paths:
                                     type: string
                                     maxLength: 80
                                     default: ""
+                                  textWire:
+                                    type: string
+                                    enum: [chat-completion, responses, claude-api]
+                                    description: 仅文本模型。按协议插件的 create.path 识别的请求格式，浏览器据此选择系统代理路径；识别不出时省略。
                                   tags:
                                     type: array
                                     maxItems: 5
@@ -1479,6 +1745,53 @@ paths:
           description: 信封 data 仅包含 welcomeEnabled 布尔值，默认 true；Cache-Control 为 no-store
         "500":
           description: 配置读取失败
+  /public/inspirations/feed:
+    get:
+      tags: [inspirations]
+      security: []
+      summary: 读取灵感上新条目（匿名可读）
+      description: 后端定时从 YouMind、awesome-seedance 同步的中文条目，按首次收录时间倒序，最多 3000 条；进程内缓存 5 分钟。按 IP 每分钟 120 次。
+      responses:
+        "200": { description: "data={enabled,entries[{id,title,description,image,mode,prompt,category?,tags?,sourceId,credit?,sourceUrl?,addedAt,publishedAt?}],categories{来源:{分类码:名称}},syncedAt?}；enabled=false 时 entries 为空" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+  /admin/settings/inspiration-feed:
+    get:
+      tags: [inspirations, admin]
+      summary: 灵感上新状态（管理员）
+      responses:
+        "200": { description: "data.status={enabled,intervalHours,lastAttemptAt?,lastSuccessAt?,nextSyncAt?,lastError?,trigger?,sources[{sourceId,upstream,accepted,created,updated,error?}],total,bySource}" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [inspirations, admin]
+      summary: 开启或关闭灵感上新（管理员）
+      description: 关闭后停止同步，公开接口不再返回已收录条目；写入管理员审计。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: data.status 为最新状态 }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /admin/settings/inspiration-feed/sync:
+    post:
+      tags: [inspirations, admin]
+      summary: 立即同步灵感上新（管理员）
+      description: 同步与请求解绑，最长约 8 分钟；部分来源失败仍返回 200，失败原因在 status.lastError 与 sources[].error。
+      responses:
+        "200": { description: data.status 为同步后的状态 }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { description: 上新已关闭，或另一实例/请求正在同步 }
+        "502": { description: 全部来源都同步失败 }
   /agent/capabilities:
     get:
       tags: [agent]
@@ -2390,7 +2703,7 @@ paths:
                             prices:
                               type: object
                               additionalProperties: false
-                              description: 按次/秒仅unit字段；文本Token为输入、输出、缓存；视频Token仅输出。必须完整提交对应字段。
+                              description: 按次/秒仅unit字段；文本Token为输入、输出、缓存命中、缓存写入；视频Token仅输出。必须完整提交对应字段。
                               properties:
                                 unitPriceMicrocredits:
                                   {
@@ -2420,6 +2733,13 @@ paths:
                                     minimum: 0,
                                     maximum: 1000000000000,
                                   }
+                                cacheWriteTokenPriceMicrocredits:
+                                  {
+                                    type: integer,
+                                    format: int64,
+                                    minimum: 0,
+                                    maximum: 1000000000000,
+                                  }
             example:
               {
                 models:
@@ -2438,6 +2758,133 @@ paths:
                     },
                   ],
               }
+      responses:
+        "200":
+          description: 更新成功，data.updated 为更新的模型数量
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, enum: [0] }
+                  msg: { type: string }
+                  data:
+                    type: object
+                    properties:
+                      updated: { type: integer }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /admin/channels/{id}/models/batch-protocol:
+    post:
+      tags: [admin]
+      summary: 批量修改系统渠道模型的调用协议
+      description: |
+        仅管理员可用。把同一系统渠道内所选模型切换到同一调用协议；协议能力必须与每个模型的能力一致。
+        保留原能力配置与价格档，只按新协议重新规范化并校验；任一模型不兼容、已删除或被并发修改时整批拒绝。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [modelIds, protocol]
+              properties:
+                modelIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string, minLength: 1 }
+                protocol: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: 更新成功，data.updated 为更新的模型数量
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, enum: [0] }
+                  msg: { type: string }
+                  data:
+                    type: object
+                    properties:
+                      updated: { type: integer }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /admin/channel-models/batch-protocol:
+    post:
+      tags: [admin]
+      summary: 跨系统渠道批量修改模型调用协议
+      description: |
+        仅管理员可用。规则同 `/admin/channels/{id}/models/batch-protocol`，但所选模型可来自不同系统渠道；
+        每个模型按所属渠道校验协议鉴权要求，不属于系统渠道或已删除的模型整批拒绝。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [modelIds, protocol]
+              properties:
+                modelIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string, minLength: 1 }
+                protocol: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: 更新成功，data.updated 为更新的模型数量
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, enum: [0] }
+                  msg: { type: string }
+                  data:
+                    type: object
+                    properties:
+                      updated: { type: integer }
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /admin/channel-models/batch-reprice:
+    post:
+      tags: [admin]
+      summary: 跨系统渠道批量保存模型最终销售价
+      description: |
+        仅管理员可用。请求结构与校验规则同 `/admin/channels/{id}/models/batch-reprice`，
+        但所选模型可来自不同系统渠道；不属于系统渠道或已删除的模型整批拒绝。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [models]
+              properties:
+                models:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: object }
       responses:
         "200":
           description: 更新成功，data.updated 为更新的模型数量
@@ -2855,10 +3302,15 @@ paths:
               properties:
                 username: { type: string }
                 password: { type: string }
+                autoRegister:
+                  type: boolean
+                  description: 一体表单提交；账号不存在且允许注册时返回 404 account_not_registered
       responses:
         "200":
           $ref: "#/components/responses/Envelope"
         "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /projects:
     get:
@@ -3116,6 +3568,12 @@ paths:
     post:
       tags: [tasks]
       summary: 创建生成任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
       responses:
         "200":
           $ref: "#/components/responses/Envelope"
@@ -3236,6 +3694,36 @@ components:
       in: cookie
       name: open_ai_canvas_session
   schemas:
+    ThinkingRequest:
+      type: string
+      enum: ["", auto, deep, off, minimal, low, medium, high, max]
+      description: 空串或省略等同 auto（模型默认）；deep 取模型支持的最高非 max 档位。具体档位按实际渠道模型的思考能力归一，不改变计价。
+    CanvasTextOptions:
+      type: object
+      properties:
+        stream:
+          type: boolean
+        thinkingLevel:
+          $ref: "#/components/schemas/ThinkingRequest"
+    CreateTaskRequest:
+      type: object
+      required: [type]
+      properties:
+        projectId: { type: string }
+        type: { type: string }
+        operation: { type: string }
+        prompt: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        logicalModelId: { type: string }
+        input:
+          type: object
+          description: 按任务模式传入参数；模型、渠道、协议与计价由服务端重新校验。电商文本阶段的思考意图由后台阶段配置覆盖。
+          properties:
+            mode: { type: string }
+            textOptions:
+              $ref: "#/components/schemas/CanvasTextOptions"
+          additionalProperties: true
     FeedbackAttachment:
       type: object
       required: [id, name, type, url, size, mimeType]
@@ -3400,6 +3888,14 @@ components:
             size: "16:9"
             videoSeconds: 5
             videoGenerateAudio: true
+        referenceVideoDurationsMs:
+          type: array
+          description: 仅报价使用；按顺序给出参考视频时长（毫秒），长度必须等于 inputs.video。省略时按 15 秒上限预估。真实任务不读取该字段，按秒计费的参考视频时长由后端实测
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+            maximum: 3600000
     LogicalModelQuote:
       type: object
       required:
@@ -3426,6 +3922,30 @@ components:
           description: Token 计费为 true；优先有效上游 usage，视频无有效用量时按提交的公式快照结算，预留不构成费用上限
         videoTokenEstimate:
           $ref: "#/components/schemas/VideoTokenEstimate"
+        referenceVideo:
+          $ref: "#/components/schemas/QuoteReferenceVideo"
+    QuoteReferenceVideo:
+      type: object
+      description: 仅按秒或视频 Token 计费的视频请求挂参考视频时返回（按次计费不返回），用于展示“生成 N 秒 + 参考视频 M 秒”的报价构成
+      required:
+        [count, billed, generatedSeconds, referenceSeconds, billedSeconds, estimated]
+      properties:
+        count: { type: integer, minimum: 1 }
+        billed:
+          type: boolean
+          description: true 表示模型开启参考视频计费，本次按带参考视频价格计入参考视频；false 表示参考视频不计费
+        generatedSeconds: { type: integer, format: int64, minimum: 0 }
+        referenceSeconds:
+          type: number
+          description: 参考视频总秒数；计费时为计入的秒数，不计费时为已知时长（未知为 0）
+        billedSeconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 按秒计费时计入数量的参考视频秒数（向上取整）；Token 计费为 0
+        estimated:
+          type: boolean
+          description: 参考视频时长未知，按 15 秒上限预估
     VideoTokenEstimate:
       type: object
       description: 仅视频 Token 报价返回；将火山公式用量和平台预留余量分开披露
@@ -3750,8 +4270,8 @@ components:
           enum: [read_only, request_approval, auto]
         reasoningMode:
           type: string
-          enum: [off, auto, deep]
-          description: 本轮推理策略；供应商是否支持由后端校验
+          enum: [off, auto, deep, minimal, low, medium, high, max]
+          description: 本轮思考意图或明确档位；auto 沿用模型默认，deep 取最高非极限档，max 明确选择极限；按实际渠道模型能力归一
         profileRevision:
           type: string
           description: GET /agent/profile 的生效合并 revision；变化时拒绝创建新轮次
