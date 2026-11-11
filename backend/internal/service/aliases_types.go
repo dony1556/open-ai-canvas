@@ -21,6 +21,7 @@ type (
 	EcommerceCreativeDirectionSelection    = app.EcommerceCreativeDirectionSelection
 	EcommerceKnowledgeEvidence             = app.EcommerceKnowledgeEvidence
 	DeleteEcommerceProjectsRequest         = app.DeleteEcommerceProjectsRequest
+	EcommerceRoundImageUpdateRequest       = app.EcommerceRoundImageUpdateRequest
 	BindProjectAssetImageRequest           = app.BindProjectAssetImageRequest
 	PaymentOrderQuery                      = app.PaymentOrderQuery
 	PaymentReconciliationQuery             = app.PaymentReconciliationQuery
@@ -43,6 +44,8 @@ type (
 	AgentMemoryRevisionRestore             = app.AgentMemoryRevisionRestore
 	AgentMemoryProposalView                = app.AgentMemoryProposalView
 	AgentMemoryRevisionView                = app.AgentMemoryRevisionView
+	APICallGenerationContent               = app.APICallGenerationContent
+	APICallGenerationReference             = app.APICallGenerationReference
 	APICallLogPage                         = app.APICallLogPage
 	APICallLogQuery                        = app.APICallLogQuery
 	AccountFileStorageUsage                = app.AccountFileStorageUsage
@@ -134,6 +137,12 @@ type (
 	ChannelModelCatalogOptions             = app.ChannelModelCatalogOptions
 	ChannelModelPriceTierRequest           = app.ChannelModelPriceTierRequest
 	ChannelModelRequest                    = app.ChannelModelRequest
+	ChannelModelProtocolGroup              = app.ChannelModelProtocolGroup
+	ChannelModelBatchProtocolRequest       = app.ChannelModelBatchProtocolRequest
+	BatchChannelModelUpdate                = app.BatchChannelModelUpdate
+	BatchChannelModelChanges               = app.BatchChannelModelChanges
+	BatchModelCapabilityTemplate           = app.BatchModelCapabilityTemplate
+	BatchModelPricingTemplate              = app.BatchModelPricingTemplate
 	ChannelModelRepriceRequest             = app.ChannelModelRepriceRequest
 	ChannelModelQuoteRequest               = app.ChannelModelQuoteRequest
 	ChannelModelSortRequest                = app.ChannelModelSortRequest
@@ -372,7 +381,6 @@ type (
 	TextReferenceConfig                    = app.TextReferenceConfig
 	TextReplayResult                       = app.TextReplayResult
 	TimelineRenderCreateRequest            = app.TimelineRenderCreateRequest
-	TimelineTranscriptionCreateRequest     = app.TimelineTranscriptionCreateRequest
 	RevokeStorageGrantRequest              = app.RevokeStorageGrantRequest
 	TopupProductRequest                    = app.TopupProductRequest
 	UpdateAnnouncementRequest              = app.UpdateAnnouncementRequest

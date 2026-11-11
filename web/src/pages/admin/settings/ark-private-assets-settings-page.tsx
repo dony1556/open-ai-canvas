@@ -1,26 +1,24 @@
 import { App, Button, Form, Input, InputNumber, Skeleton } from "antd";
 import { Select } from "@/components/ui/base/select";
-import { AdminSegmented, Switch } from "@/pages/admin/ui/controls";
+import { Switch } from "@/pages/admin/ui/controls";
 import { AlertTriangle, CloudUpload, Coins, KeyRound, RefreshCw, RotateCcw, Save, UsersRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useBlocker, useSearchParams } from "react-router";
+import { useBlocker } from "react-router";
 
 import { cn } from "@/lib/utils";
 import { getAdminArkPrivateAssetSetting, updateAdminArkPrivateAssetSetting, type AdminArkPrivateAssetSetting } from "@/services/api/auth";
 import { AdminPageFrame } from "../components/admin-shell";
 import { AdminStatusBadge, configuredSecretText, SettingsSectionCard } from "../components/admin-ui";
-import ArkAssetsManager from "./ark-assets-manager";
-import { ArkAdminGroupsTab } from "./ark-assets/ark-admin-groups-tab";
-import { ArkAdminReviewsTab } from "./ark-assets/ark-admin-reviews-tab";
-import "./ark-assets/ark-admin.css";
+import { ArkGrantUsersField } from "./ark-assets/ark-grant-users-field";
 
 type ArkSite = AdminArkPrivateAssetSetting["site"];
-type ArkTab = "groups" | "reviews" | "settings";
 
 const MICRO_PER_CREDIT = 1_000_000;
-const PAGE_DESCRIPTION = "管理平台方舟账号下的真人、虚拟与版权 IP 素材组，审核用户上传，并配置方舟凭据、开放范围与建组收费";
+const PAGE_DESCRIPTION = "配置方舟凭据、开放范围、上传审核策略与建组收费；素材上传和管理请前往创作前台的方舟素材库";
 
 type ArkPrivateAssetForm = {
+    libraryVisibleToAll: boolean;
+    libraryVisibleUserIds: string[];
     enabled: boolean;
     realEnabled: boolean;
     virtualEnabled: boolean;
@@ -42,6 +40,8 @@ type ArkPrivateAssetForm = {
 
 type ArkPrivateAssetPayload = Pick<
     AdminArkPrivateAssetSetting,
+    | "libraryVisibleToAll"
+    | "libraryVisibleUserIds"
     | "enabled"
     | "realEnabled"
     | "virtualEnabled"
@@ -77,38 +77,16 @@ const ARK_SITE_META: Record<ArkSite, { label: string; regionPlaceholder: string;
     },
 };
 
-const ARK_TABS: Array<{ value: ArkTab; label: string }> = [
-    { value: "groups", label: "素材组" },
-    { value: "reviews", label: "上传审核" },
-    { value: "settings", label: "配置" },
-];
-
-/** 方舟素材库：素材组 / 上传审核 / 配置三个视图；配置有未保存草稿时切换视图不丢失，离开页面会确认。 */
+/** 后台仅保留平台配置，业务操作统一在创作前台。 */
 export default function ArkPrivateAssetsSettingsPage() {
-    const [searchParams, setSearchParams] = useSearchParams();
-    const requestedTab = searchParams.get("tab");
-    const tab: ArkTab = requestedTab === "reviews" || requestedTab === "settings" ? requestedTab : "groups";
-    const selectTab = (next: ArkTab) => {
-        const params = new URLSearchParams(searchParams);
-        if (next === "groups") params.delete("tab");
-        else params.set("tab", next);
-        setSearchParams(params, { replace: true });
-    };
     return (
-        <AdminPageFrame title="方舟素材库" description={PAGE_DESCRIPTION} actions={<AdminSegmented<ArkTab> ariaLabel="方舟素材库视图" value={tab} onChange={selectTab} options={ARK_TABS} />} scroll>
-            <div className="admin-ark-tabs-body">
-                {tab === "groups" ? <ArkAdminGroupsTab onOpenReviews={() => selectTab("reviews")} /> : null}
-                {tab === "reviews" ? <ArkAdminReviewsTab /> : null}
-                {/* 配置表单常驻挂载：切到其他视图时保留草稿。 */}
-                <div hidden={tab !== "settings"}>
-                    <ArkPrivateAssetsSettingsForm active={tab === "settings"} />
-                </div>
-            </div>
+        <AdminPageFrame title="方舟素材库" description={PAGE_DESCRIPTION} scroll>
+            <ArkPrivateAssetsSettingsForm />
         </AdminPageFrame>
     );
 }
 
-function ArkPrivateAssetsSettingsForm({ active }: { active: boolean }) {
+function ArkPrivateAssetsSettingsForm() {
     const { message, modal } = App.useApp();
     const [setting, setSetting] = useState<AdminArkPrivateAssetSetting | null>(null);
     const [loading, setLoading] = useState(true);
@@ -399,7 +377,7 @@ function ArkPrivateAssetsSettingsForm({ active }: { active: boolean }) {
                             className="admin-ark-section admin-ark-policy-section"
                             icon={<CloudUpload className="size-4" aria-hidden="true" />}
                             title="2. 视频生成时自动导入"
-                            description="仅控制生成前的自动导入。凭据配置完整时，画布手动上传和后台管理始终可用。"
+                            description="仅控制生成前的自动导入。凭据配置完整时，画布仍可手动上传；创作前台素材库的可见范围由下方单独配置。"
                             status={<AdminStatusBadge label={draftEnabled ? "已启用" : "已停用"} tone={draftEnabled ? "success" : "neutral"} />}
                         >
                             <div className="admin-ark-policy-control">
@@ -425,7 +403,7 @@ function ArkPrivateAssetsSettingsForm({ active }: { active: boolean }) {
                                 className="admin-ark-section admin-ark-policy-section"
                                 icon={<UsersRound className="size-4" aria-hidden="true" />}
                                 title="3. 开放用户素材组"
-                                description="用户在「设置 → 方舟素材库」自助建组：真人素材组需本人完成 H5 活体认证，虚拟素材组直接创建。版权 IP 素材组只能由管理员创建并授权。"
+                                description="用户在「创作前台 → 方舟素材库」自助建组：真人素材组需本人完成 H5 活体认证，虚拟素材组直接创建。版权 IP 素材组只能由管理员创建并授权。"
                                 status={<AdminStatusBadge label={userGroupsOpen ? "已开放" : "未开放"} tone={userGroupsOpen ? "success" : "neutral"} />}
                             >
                                 <div className="admin-ark-policy-control">
@@ -518,23 +496,30 @@ function ArkPrivateAssetsSettingsForm({ active }: { active: boolean }) {
                         </div>
                     </>
                 ) : null}
+                <SettingsSectionCard icon={<UsersRound className="size-4" aria-hidden="true" />} title="5. 方舟素材库可见用户" description="管理员始终可见。被授权用户可查看当前方舟项目的全部素材，不区分上传账号；改名和删除仍仅管理员可操作。">
+                    <div className="p-5 space-y-4">
+                        <div className="flex items-center justify-between gap-4">
+                            <strong>全部登录用户可见</strong>
+                            <Form.Item name="libraryVisibleToAll" valuePropName="checked" noStyle>
+                                <Switch aria-label="方舟素材库对全部登录用户可见" />
+                            </Form.Item>
+                        </div>
+                        {!watchedValues?.libraryVisibleToAll ? (
+                            <Form.Item name="libraryVisibleUserIds" initialValue={[]} label="指定可见用户" extra="未选择用户时，仅管理员可查看素材库。">
+                                <ArkGrantUsersField />
+                            </Form.Item>
+                        ) : null}
+                    </div>
+                </SettingsSectionCard>
             </Form>
-            <SettingsSectionCard icon={<CloudUpload className="size-4" aria-hidden="true" />} title="5. 已上传素材" description="查看、改名和删除当前方舟项目中的素材；人像库管理的素材请使用素材组入口。">
-                <div className="p-5">
-                    <ArkAssetsManager
-                        key={`${setting.site}:${setting.region}:${setting.projectName}:${setting.accessKeyId}:${setting.updatedAt}`}
-                        scope={`${setting.site}:${setting.region}:${setting.projectName}:${setting.accessKeyId}:${setting.updatedAt}`}
-                        ready={Boolean(setting.region && setting.projectName && setting.accessKeyId && setting.hasAccessKeySecret)}
-                        disabled={!active || dirty || saving || refreshing}
-                    />
-                </div>
-            </SettingsSectionCard>
         </div>
     );
 }
 
 function toFormValues(setting: AdminArkPrivateAssetSetting): ArkPrivateAssetForm {
     return {
+        libraryVisibleToAll: Boolean(setting.libraryVisibleToAll),
+        libraryVisibleUserIds: setting.libraryVisibleUserIds || [],
         enabled: setting.enabled,
         realEnabled: setting.realEnabled,
         virtualEnabled: setting.virtualEnabled,
@@ -562,6 +547,8 @@ function wholeNumber(value: unknown, fallback: number) {
 
 function normalizeArkPrivateAssetPayload(values: Partial<ArkPrivateAssetForm>): ArkPrivateAssetPayload {
     return {
+        libraryVisibleToAll: Boolean(values.libraryVisibleToAll),
+        libraryVisibleUserIds: [...new Set(values.libraryVisibleUserIds || [])].sort(),
         enabled: Boolean(values.enabled),
         realEnabled: Boolean(values.realEnabled),
         virtualEnabled: Boolean(values.virtualEnabled),
@@ -583,6 +570,7 @@ function normalizeArkPrivateAssetPayload(values: Partial<ArkPrivateAssetForm>): 
 }
 
 const COMPARED_FIELDS = [
+    "libraryVisibleToAll",
     "enabled",
     "realEnabled",
     "virtualEnabled",
@@ -605,7 +593,7 @@ function hasArkPrivateAssetChanges(values: Partial<ArkPrivateAssetForm>, setting
     if (!setting) return false;
     const draft = normalizeArkPrivateAssetPayload(values);
     const saved = normalizeArkPrivateAssetPayload(toFormValues(setting));
-    return draft.accessKeySecret !== "" || COMPARED_FIELDS.some((field) => draft[field] !== saved[field]);
+    return draft.accessKeySecret !== "" || COMPARED_FIELDS.some((field) => draft[field] !== saved[field]) || JSON.stringify(draft.libraryVisibleUserIds) !== JSON.stringify(saved.libraryVisibleUserIds);
 }
 
 function validateArkPrivateAssetDraft(values: ArkPrivateAssetForm, setting: AdminArkPrivateAssetSetting) {
@@ -637,13 +625,16 @@ function nextSecretPresence(values: ArkPrivateAssetPayload, setting: AdminArkPri
 
 function arkPrivateAssetResponseMatches(setting: AdminArkPrivateAssetSetting, expected: ArkPrivateAssetPayload, expectedHasSecret: boolean) {
     const saved = normalizeArkPrivateAssetPayload(toFormValues(setting));
-    return COMPARED_FIELDS.every((field) => saved[field] === expected[field]) && setting.hasAccessKeySecret === expectedHasSecret;
+    return COMPARED_FIELDS.every((field) => saved[field] === expected[field]) && JSON.stringify(saved.libraryVisibleUserIds) === JSON.stringify(expected.libraryVisibleUserIds) && setting.hasAccessKeySecret === expectedHasSecret;
 }
 
 function isAdminArkPrivateAssetSetting(value: unknown): value is AdminArkPrivateAssetSetting {
     if (!value || typeof value !== "object") return false;
     const setting = value as Partial<AdminArkPrivateAssetSetting>;
     return (
+        typeof setting.libraryVisibleToAll === "boolean" &&
+        Array.isArray(setting.libraryVisibleUserIds) &&
+        setting.libraryVisibleUserIds.every((id) => typeof id === "string") &&
         typeof setting.enabled === "boolean" &&
         typeof setting.realEnabled === "boolean" &&
         typeof setting.virtualEnabled === "boolean" &&

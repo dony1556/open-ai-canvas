@@ -5,6 +5,14 @@ description: 信封、错误码与 OpenAPI
 
 # HTTP API 合同
 
+## 方舟已有素材查询
+
+`GET /api/ark-assets` 要求登录，筛选与返回合同复用 `/api/admin/ark-assets`。管理员始终可见；其他用户必须在后台全库可见范围内，否则返回403。所有可见用户均读取当前方舟项目的全部素材，不按上传账号区分。查询不创建素材组、不上传素材、不写入授权。修改名称和删除接口继续只允许管理员。
+
+`GET /api/ark-assets/groups?groupType=AIGC&nextToken=...` 使用同样权限，调用方舟 ListAssetGroups 获取下拉选项。`data={items,nextToken}`，每组包含 `id/name/groupType`，每页最多100组，可继续加载下一页。
+
+后台方舟配置新增 `libraryVisibleToAll` 与 `libraryVisibleUserIds`。前者允许全部登录用户查看；关闭时仅指定用户及管理员可见。默认均未设置，只允许管理员。保存时去重并校验指定账号存在，最多500人。该配置不授权改名或删除。
+
 ## 方舟素材库管理
 
 `GET /api/admin/ark-assets` 要求管理员，读取服务端配置的方舟项目，返回 `data={items,nextToken}`。可选筛选为 `name`（最多 64 字符）、`groupId`、`groupType`（默认 `AIGC`，也可选 `LivenessFace`）、`status`（`Active|Processing|Failed`）及 `nextToken`；每页最多 20 条。素材包含 `id/name/url/groupId/assetType/status/projectName/createTime/lastInferenceTime/error`，预览地址有时效，刷新列表重新获取。
@@ -14,6 +22,51 @@ description: 信封、错误码与 OpenAPI
 上述管理接口与 `POST /api/resources/:id/ark-private-asset` 手动上传不受后台自动导入开关控制，但要求完整 Region、ProjectName、IAM AK/SK。自动导入开关仍只控制视频任务执行时的同步。管理员删除的绑定不会自动重新上传，用户可在画布显式手动重新上传。
 
 后台或任务关闭自动同步时，方舟视频任务仍复用已有 active 绑定并使用 `asset://` 引用；没有可用绑定则沿用原图片地址，不创建新远端素材。
+## 网站访问统计
+
+| 接口 | 合同 |
+| --- | --- |
+| `POST /api/traffic/events` | 匿名写入 `{events:[{id,visitorId,sessionId,type,page,action?}]}`；返回 `{accepted}`，重复事件不重复计数 |
+| `GET /api/admin/traffic/overview?from=YYYY-MM-DD&to=YYYY-MM-DD` | 登录管理员读取范围概览；省略日期使用默认范围，`to` 为所选最后自然日 |
+| `GET /api/admin/traffic/today` | 登录管理员读取今日逐小时统计及近 300 秒活跃访客 |
+
+响应沿用统一信封，管理员权限在服务层复核。匿名入口要求通过全局 CORS 的明确 Origin，接受 UTF-8 `application/json`，请求体最多 16 KiB、每批 1–20 条；拒绝未知字段、额外 JSON 和非法类型。事件、访客、会话 ID 均须为规范随机 UUIDv4。全站每分钟 3000 次、固定 IP 散列桶每分钟 120 次限流，桶碰撞共享额度。`page_view` 不携带操作，`action` 必须使用登记操作键。
+
+页面键登记 13 类：`inspirations/create/canvas_list/canvas/assets/history/ecommerce/ecommerce_pipeline/drama/skills/referral/tools_image/tools_video`；上游当前路由覆盖其中 11 类，尚无独立 `inspirations` 与 `ecommerce_pipeline` 路由，`/` 和 `/create` 都计为创作页。登录注册、账号设置、欢迎页和未知路径不采集。七个操作键为 `open_create/new_canvas/open_ecommerce/creation_submit_text/creation_submit_image/creation_submit_video/creation_submit_agent`，`page` 表示操作来源。当前上游只接入前三项和文本、图片、视频提交意图，Agent 动作仅保留登记，零值不能证明没有 Agent 使用。
+
+统计按 `Asia/Shanghai` 自然日及服务端接收时间计算，保留含今日 365 天；有效窗口为半开区间，截止服务端当前整秒，不含当前秒。概览包含 UV、PV、会话、操作、同长度上期对比、日趋势与明细、页面及功能排行、星期×24 小时热力、操作趋势、页面参与度和访问深度。各 SQL 聚合使用同一截止时间，但不是跨查询冻结快照，不强行把不同聚合的分母互相校正。`availableFrom` 只证明保留事件中最早观测，不证明启用时间或此前完整采集；不可计算的比例为 `null`，空列表为 `[]`。
+
+`insights.operations` 提供五项运营分析：
+
+- `visitorMix`：只按合法 PV 判断首次观测和回访；保留窗内、当期之前的 PV 才是回访证据。没有回看窗口时为 `no_lookback`，分类及比例为 `null`。
+- `endpoints`：每个会话首末接收秒只有一个不同页面才分配，同秒多页计入待定。末观测页不等于退出页，不推断停留或跳出。
+- `paths`：接收秒分桶后取相邻唯一页面，保留歧义桶以阻止跨桶桥接；同会话同页面对去重，返回稳定 Top 10。不同路径可重叠，不证明直接跳转或因果。
+- `funnel`：同会话按“灵感 PV → 灵感页打开创作 → 创作 PV → 创作提交意图”有序匹配；严格链使用后继秒大于前项，可能链允许同秒，差额单独展示。上游灵感嵌在创作页，没有独立起点 PV，完整漏斗保持零起点空态，直接创作不补入完整链。提交意图不等于任务创建、生成或支付成功。
+- `anomalies`：复用上期对比四项 KPI；基数至少 30、绝对变化至少 10 且相对变化至少 30% 才提示增减。零基数、小样本及不可比较分别说明；未触发规则不代表系统无故障。
+
+浏览器使用随机匿名身份，跨标签共享，连续 30 分钟无活动后更换会话；尊重 DNT/GPC，禁用存储时退化为本页内存身份，不尝试指纹识别或关联账号。清缓存、多设备、合批、网络重试及跨标签会影响覆盖和观测顺序，不提供账号、IP、原始事件、哈希或个人轨迹查询。CSV 由前端使用已成功应用的完整聚合快照生成每日、页面、功能三类导出，保留范围和截止元数据，并进行 CSV 转义及公式注入防护；来源筛选仅影响功能排行与功能 CSV。
+
+## 网站、Key 分组与模型批量配置
+
+以下接口沿用登录 Cookie、Origin 检查及 `{ code, data, msg, reason }` 信封，服务层要求管理员权限。网站公共连接与各 Key 的凭据分开维护；网站响应不包含 Key。
+
+| 接口 | 入参与结果 |
+| --- | --- |
+| `GET /api/admin/channel-websites` | 返回 `data.websites[]`，包含 `id/name/baseUrl/apiFormat/proxyUrl/headers/keyCount/createdAt/updatedAt` |
+| `POST /api/admin/channel-websites`、`PATCH /api/admin/channel-websites/:id` | `{name,baseUrl,apiFormat,proxyUrl,headers,expectedUpdatedAt?}`；编辑携带读取时的 `updatedAt`，公共连接同步到网站下的 Key，返回 `data.website`。公共头仅接受 `Anthropic-Version`、`OpenAI-Beta` |
+| `DELETE /api/admin/channel-websites/:id` | 仅允许删除空网站，返回 `data.ok` |
+| `POST /api/admin/channels`、`PATCH /api/admin/channels/:id` | 原合同增加 `websiteId`；编辑可携带 `expectedUpdatedAt`。关联网站后公共连接从网站取得，Key 凭据和模型独立 |
+| `GET /api/admin/channels/:id/catalog-status` | 返回最近目录 `models/readAt?/stale`，不请求上游 |
+| `POST /api/admin/channels/:id/models/fetch` | 读取该 Key 的目录，返回 `models/added/retained/missing/firstRead/baselineReset/readAt/previousReadAt?`；缺失型号不会自动删除 |
+| `GET /api/admin/channels/:id/protocol-suggestion` | 查询参数 `providerModelKey/capability`；返回 `protocol?`、`source`（`selection/history/conflict/none/invalid`）、`candidates`、`reason?`、`selectedAt?`。建议不等于明确选择 |
+| `POST /api/admin/channels/:id/models/batch-update`、`POST /api/admin/channel-models/batch-update` | `{models:[{modelId,priceVersion,capabilityVersion,updatedAt,changes}]}`，分别限定单 Key 或允许跨 Key；返回 `data.updated` |
+| `POST /api/admin/channels/:id/models/batch-protocol`、`POST /api/admin/channel-models/batch-protocol` | 支持 `{groups:[{modelIds,protocol}]}`，按模型原类型分组设置协议 |
+
+`changes` 可包含 `capability`（仅初始化未设置类型的模型）、`protocol`、`displayName`、`description`、`enabled`、`pricingEnabled`、`capabilityTemplate`、`pricingTemplate`。省略字段保持原值，不接受以 `null` 隐式清空或设置为零。`capabilityTemplate` 只需 `{capabilityConfig}`，不能用模板内容隐式切换协议；`pricingTemplate` 为 `{priceCurrency,referenceVideoBilling,priceTiers}`，金额和开关按价格档合同明确提供。
+
+`pricingEnabled` 对所选模型全部价格档的「可供用户使用」生效，不修改金额、成本或免费状态。整个批次先组合并校验最终配置，检查模型时间戳及能力 / 价格版本，再在一个事务内写入；任一项失效或类型冲突则整批零写入，返回 HTTP 400、`reason=invalid_argument`。接口拒绝未知字段及多余 JSON 对象，批量请求体上限为 2 MiB。客户端收到成功后刷新失败时，应刷新列表而非重发修改。
+
+使用说明见[渠道、模板与批量配置](/docs/backend/channel-configuration)，迁移见[后端数据库](/docs/backend/backend-database)。
 
 ## 灵感上新
 
@@ -169,6 +222,10 @@ description: 信封、错误码与 OpenAPI
 Pi 模型桥在保存待执行调用之前，复用单步输出限制校验：一次回复最多 8 个工具调用，正文最多 32000 字节。超限时整批未执行，释放本步模型任务并附带 `invalid_output` 及具体上限要求模型分批纠正；与既有异常重试共用首次失败后最多 3 次的上限，不截取部分调用执行。纠正请求仍是正常计费的文本模型任务，不创建媒体任务。
 
 ## Agent 媒体规格与会话恢复
+
+删除画布或其所属领域项目时，与 Agent 入场共用画布锁，检查尚未写检查点的预留任务、运行中、等待审批/用户和终态清理。仍有活动时返回 HTTP 409、`reason=canvas_agent_busy`，需先停止并等待已提交的媒体处理结束；不会通过删除解除审批、丢弃任务关联或重建画布。
+
+Agent 取消先持久化终态和清理标记再中止运行进程，重启后只恢复未完成的终态清理，不再次调用模型。初始化冲突请求不再写入历史关联行；执行计数与消息/事件读取使用同一快照。客户端携带显式 `profileRevision` 时，已经接收的原请求可以在偏好变化或画布删除后按完整请求指纹确认幂等结果；同键变更正文、模型、父轮次或偏好快照仍拒绝，新键仍检查当前资源存在与归属。
 
 媒体准入发现解析规格与申请值不一致时，返回具体参数的 `field`、`issue=invalid_value` 及申请值与解析值，进入现有的有限次工具纠正流程；同一工具累计三次失败后停止。视频时长字段映射为 `durationSeconds`，视频清晰度映射为 `quality`。修正后仍须用户审批，未通过准入不创建媒体任务或媒体账单。图片 `quality` 档位已解析为同值 `imageResolution` 时按等价表达核对，不能因原质量字段为空误拒绝，也不能放过真正不同的分辨率。
 
@@ -336,6 +393,14 @@ CANVAS_BACKEND_DATA_DIR=/明确的数据目录 ./migrate-schema repair-canvas-re
 
 `PATCH /admin/settings/registration` 的两个协议字段为可选指针语义：不提交表示保留已保存内容，提交空串表示明确清空。注册开关与协议正文可以分开保存，单独切换 `enabled` 不会覆盖协议。当前只校验本次注册的同意标志，不保存长期协议版本或签署凭证。前后端需一起更新，旧客户端缺少同意标志时无法注册。
 
+## OIDC 登录
+
+在身份提供方创建机密客户端，开启授权码流程和 PKCE S256，在提供方登记 `https://<影策域名>/api/auth/oidc/callback`。将签发方、客户端 ID、客户端密钥和完整回调分别设为后端环境变量 `CANVAS_OIDC_ISSUER`、`CANVAS_OIDC_CLIENT_ID`、`CANVAS_OIDC_CLIENT_SECRET`、`CANVAS_OIDC_REDIRECT_URL`。官方生产 Compose 从部署环境传入这些变量。回调和登录入口使用同一 HTTPS 域名。配置生效后，`GET /auth/settings` 的 `oidcEnabled` 为 true，登录表单显示 OIDC 入口。
+
+默认按公开注册开关决定是否允许首次开户。仅员工可访问时，关闭公开注册，再将 `CANVAS_OIDC_ALLOWED_GROUP` 设为专用组的完整名称或 ID，并让提供方在签名 ID Token 的 `groups` 数组中返回该值。每次 OIDC 登录都校验组成员身份，缺少匹配组时拒绝登录。首次开户要求同意协议，创建普通用户。启用了短信和邮箱双重注册验证时，仍拒绝 OAuth 首次开户。账号按签发方和 `sub` 识别，不按邮箱合并。撤销组权限会拒绝后续 OIDC 登录。需要终止已有会话时，请同时停用影策账号。
+
+`GET /auth/oidc/start` 接收站内 `next` 和 `acceptedTerms=true`，将协议状态保存在一次性 OAuth state。回调匹配发起浏览器的安全 Cookie，并校验签名、签发方、受众、有效期和 nonce。发现、令牌、公钥请求沿用后端出站地址限制，要求 HTTPS，不跟随重定向，单次响应上限 1 MiB。发起和回调按 IP 限流，不把令牌写入会话 Cookie 或登录日志。
+
 ## 登录注册一体与邮箱要求
 
 前台只有一个登录注册表单。密码登录时客户端提交 `autoRegister: true`：账号不存在、允许创建账号（或尚无任何账号）且输入是合法用户名或邮箱时，`POST /auth/login` 返回 HTTP 404、`code=40401`、`reason=account_not_registered`，`details.accountKind` 为 `username` 或 `email`。客户端据此在同一表单补齐确认密码、邮箱或验证码和服务协议，再调用 `POST /auth/register`。注册关闭、输入不合法或未提交 `autoRegister` 时保持原来的 401“用户名、邮箱或密码不正确”，不额外暴露账号是否存在。`/register` 路由保留给推广链接，打开的也是一体表单。
@@ -470,6 +535,12 @@ Token 报价的 `estimated` 为 `true`，`quantity` 是预留 Token 数。`inten
 
 `GET /admin/api-logs` 与 `GET /admin/api-logs-export.csv` 支持 `from`、`to`（`YYYY-MM-DD` 按 UTC 自然日、含结束日，或 RFC 3339 时间点）、`userId`、`model`、`channelId`、`capability`；不传日期时默认近 30 个 UTC 日，单次最多 366 天。
 
+视频模型的 `GET /admin/api-logs/:id` 详情增加 `generationContent`，包含 `prompt`、按本次请求顺序编号的 `references[]`、`source`（`snapshot` / `task` / `request`）、`incomplete` 与可选 `note`。每个引用返回 `{ id, kind, label, name, role?, available, unavailableReason?, mediaUrl? }`；编号分别为图片、视频、音频独立计数，对应提示词中的 `@图片N`、`@视频N`、`@音频N`。列表和 CSV 不返回该快照。快照绑定实际请求，成功任务压缩输入、当前画布修改或同 ID 重试都不会替换旧日志的素材身份。
+
+`GET /admin/api-logs/:id/references/:refId/media` 读取该日志中已验证归属的原始资源，支持 HTTP Range；仅管理员可用，继续核对日志、关联任务与资源所属用户。接口固定后端转发原件，不接受 URL、资源 ID 或交付变体等查询参数，不重定向到对象存储。返回 `Cache-Control: private, no-store`、`Referrer-Policy: no-referrer` 与 `X-Content-Type-Options: nosniff`。
+
+新快照仅保存脱敏提示词、名称、编号、角色和原始资源身份，不保存密钥、请求头、外部链接、签名 URL 或内嵌媒体。方舟 `asset://` 引用只有在原始资源与当前用户的素材绑定一致时才提供预览。旧日志只使用能够确认属于同次请求的任务输入或已保存报文；原始素材没有保存、已删除或无法证明来源时返回不可用说明，不根据当前画布猜测，不在查看详情时访问外部 URL。
+
 `GET /admin/billing-orders` 的每条订单额外返回 `userDisplayName`、`userAccount`，按当前页用户 ID 批量读取；字段不入库，普通用户的订单接口不返回。
 
 ## 用户任务计费与作品花费口径
@@ -495,9 +566,11 @@ Token 报价的 `estimated` 为 `true`，`quantity` 是预留 Token 数。`inten
 
 文字任务带参考视频时同样在预授权前校验：模型未开启视频识别（`text.references.maxVideos <= 0`，后台「支持视频识别」未勾选）返回 `referenceNodeIds` / `unsupported_value`「当前文字模型未开启视频识别，请选择支持视频识别的文字模型」；视频数超过 `maxVideos` 返回 `item_count`；单个视频超过 `maxVideoBytes` 返回 `unsupported_value`。自定义渠道只在请求附带文字能力配置时校验。Claude Messages 协议没有视频内容块，带参考视频时任务失败并说明原因，不再静默丢弃视频。
 
-## 时间线渲染规格与来源标识
+## 短剧内部合成规格与来源标识
 
-时间线渲染请求的 `timeline` 可带 `fit`（`auto` / `pad` / `crop`，缺省 `auto`）。`auto` 按片段判断：来源与输出宽高比相对差 `|源宽高比 ÷ 目标宽高比 − 1|` 不超过 3% 时裁切填满，否则等比缩小补黑边；来源尺寸未知时补黑边。浏览器端精剪导出使用同一规则，默认目标为关联短剧的作品画幅，未关联时跟随首个片段（长边不超过 1920）。
+手工编辑器退场后，不再注册 `POST /timeline/renders` 和 `POST /timeline/transcriptions`；短剧内部仍可创建渲染任务，已受理任务继续使用现有处理器。剪映草稿与资产包导出保留在短剧接口。
+
+内部渲染快照的 `timeline` 可带 `fit`（`auto` / `pad` / `crop`，缺省 `auto`）。`auto` 按片段判断：来源与输出宽高比相对差 `|源宽高比 ÷ 目标宽高比 − 1|` 不超过 3% 时裁切填满，否则等比缩小补黑边；来源尺寸未知时补黑边。
 
 渲染结果 JSON 在原字段外增加 `width`、`height`、`fit`、`aigc`（写入成片的 AIGC 标识 JSON）与 `sources[]`（`clipId`、`resourceId`、`kind`、`width`、`height`、实际 `fit`、来源文件原有的 `aigc`）。成片不继承来源容器元数据，改写为 GB 45438 隐式标识：`AIGC` 字段为 `{Label, ContentProducer, ProduceID, ReservedCode1, ContentPropagator, PropagateID, ReservedCode2}`，`Label` 与生成方字段取自来源文件，`ContentPropagator` 为常量 `AIGCPlatformPropagator`（默认占位 `yingce`，部署方须替换为登记的服务提供者编码），`PropagateID` 为渲染任务 ID；另写 `comment=AI生成合成内容`。
 
@@ -980,12 +1053,15 @@ install 的 Base URL、协议、能力和成本全部从服务端快照读取，
 | `POST /dramas/:id/episodes/:episodeId/segments/:index/reprocess` | 重新处理已生成、但结果回写（如抽尾帧）失败的段视频：只重放最近一次已成功的生成任务结果，不重新调用模型、不重复扣费，返回 `{ reprocessing: true }`。段视频不是 failed、没有已入库视频或最近一次作业不可重放时返回 400。段视图的 `videoReprocessable` 为 true 时可调用 |
 | `POST /dramas/:id/shots/:shotId/insert` · `DELETE /dramas/:id/shots/:shotId` | `{ position: "before" \| "after" }` 在镜头前后插入空镜头（沿用场景与出场角色、归入同一剧情段，本段合计不能超过视频模型单次上限）/ 删除镜头（剧情段唯一的镜头不能删）；本段提示词与视频标记过期 |
 | `PATCH /dramas/:id/shots/:shotId` | 修改镜头脚本：说话人、台词（≤ 500 字）、动作、景别、运镜、起幅画面、运动描述、转场、时长（1–60 秒，且本段合计不超过视频模型单次上限）；所在段的提示词改写被清空、视频标记过期；已写好的提示词标记过期，尚未写完的退回待撰写并自动按新镜头重写 |
-| `GET /dramas/:id/cast` · `PATCH /dramas/:id/cast/:castId` | 读取 / 修改角色、道具与场景设定（名称、别名、外观、声线、锁定） |
+| `GET /dramas/:id/cast` · `PATCH /dramas/:id/cast/:castId` | 读取 / 修改角色、道具与场景设定（名称、别名、外观、声线、锁定、`imagePrompt`、`imageStyleId/imageStyleName/imageStylePrompt`）；图片提示词最多 12000 字，独立风格字段分别最多 64/120/4000 字，三项全空表示沿用作品风格 |
+| `POST /dramas/:id/cast` | 手工新增 `{ kind, name, appearance, description?, imagePrompt?, imageStyleId?, imageStyleName?, imageStylePrompt? }`，`kind=character/prop/scene`，名称 1–60 字、外观 1–1000 字；返回 `{ cast }`，保存 `imageStatus=draft`，不创建生成任务 |
+| `POST /dramas/:id/cast/:castId/image-prompt` | `{ appearance?, imageStyleId?, imageStyleName?, imageStylePrompt? }` 根据当前外观、风格与作品参考图方案重新编排，忽略旧的自定义提示词；返回 `{ imagePrompt }`，不保存、不调用模型。造型保留身份参考说明和多视图方案；独立风格不拼入全剧的旧画风规则 |
+| `POST /dramas/:id/cast/import` | `{ sourceProjectId, castIds, matchByName?, replaceExisting? }`，选择 1–500 个基础设定，角色自动携带造型。源和目标须为当前用户不同作品，事务内复用图片/声音并建立独立目标记录和来源关系；返回 `{ imported, skipped, cast }`，计数含造型。`matchByName` 只匹配唯一同类型同名记录；默认保留目标已有图片，明确 `replaceExisting=true` 才替换并保留旧版本。重复来源默认跳过，造型章节重置不限，不提交生成任务。歧义、关联冲突或目标正在生成返回 409，`reason=drama_cast_import_conflict` |
 | `PUT /dramas/:id/cast/:castId/image` | `{ resourceId, restyleSegments, source?, taskId? }` 用当前用户已就绪的图片资源替换参考图并锁定：取消排队中的生图，写入版本记录；锁定的参考图生成剧情段视频时随请求发送，并在参考图说明里标明形象以图片为准。`source` 为 `upload`（默认）或 `canvas`（从精修画布采用），`taskId` 是产出这张图的画布任务，校验属于当前用户且结果包含该资源，否则忽略。同一资源已是当前且已锁定时不重复写版本，返回 `unchanged: true`。返回 `{ cast, affectedSegments, unchanged? }` |
 | `GET /dramas/:id/cast/:castId/impact` · `POST …/regenerate` | 预览引用该设定的集数与剧情段数 `{ episodes, segments }`；重新生成参考图，`restyleSegments=true` 时引用它、且已生成或生成中的剧情段视频标记过期（段提示词只引用参考图编号，保持不变），返回实际受影响的 `{ affectedSegments }` |
 | `PUT /dramas/:id/cast/:castId/voice` · `DELETE …` | 为角色指定声音：`{ voiceProfileId }` 从声音库选一条带样本音频的声音，或 `{ sampleResourceId, voiceName? }` 用刚上传 / 录制的样本（按 `voiceName` 登记到声音库，同一样本复用一条）；`restyleSegments` 让引用该角色的剧情段视频过期。支持参考音频的视频模型在该角色开口、且本段按参考图生视频时带上样本（上游要求参考音频与参考图同时提供，尾帧续接段不混用）。没有样本音频的内置声音返回 400。DELETE 清除，只按声线描述生成。造型沿用所属角色的声音 |
-| `POST /dramas/:id/cast/:castId/looks` | 为角色新增造型（妆造）`{ lookName, appearance, imagePrompt?, fromChapter?, toChapter? }`：造型是角色子行（kind=character、`parentId` 指向角色），承载外观与默认适用章节，每角色最多 6 套。确认只保存为 `imageStatus=draft`，不创建生成任务；用户单独调用 `POST …/cast/:lookId/regenerate` 后，以角色本体图为底图生成。`imagePrompt` 最多 12000 字，留空按外观描述生成 |
-| `PATCH /dramas/:id/looks/:lookId` · `DELETE …` | 修改造型 `{ lookName?, appearance?, imagePrompt?, fromChapter?, toChapter?, restyleSegments? }`，只保存设定并保留现有图片，不自动生成；生成中拒绝修改。删除造型后，引用它的镜头回退到角色本体。自定义造型图复用 `PUT …/cast/:lookId/image`，可上传或从素材库选图，采用后锁定 |
+| `POST /dramas/:id/cast/:castId/looks` | 为角色新增造型（妆造）`{ lookName, appearance, imagePrompt?, imageStyleId?, imageStyleName?, imageStylePrompt?, fromChapter?, toChapter? }`：造型是角色子行（kind=character、`parentId` 指向角色），承载外观与默认适用章节，每角色最多 6 套。确认只保存为 `imageStatus=draft`，不创建生成任务；用户单独调用 `POST …/cast/:lookId/regenerate` 后，以角色本体图为底图生成。`imagePrompt` 最多 12000 字，留空按外观描述生成 |
+| `PATCH /dramas/:id/looks/:lookId` · `DELETE …` | 修改造型 `{ lookName?, appearance?, imagePrompt?, imageStyleId?, imageStyleName?, imageStylePrompt?, fromChapter?, toChapter?, restyleSegments? }`，只保存设定并保留现有图片，不自动生成；生成中拒绝修改。删除造型后，引用它的镜头回退到角色本体。自定义造型图复用 `PUT …/cast/:lookId/image`，可上传或从素材库选图，采用后锁定 |
 | `POST /dramas/:id/cast/regenerate-all` | 按当前参考图方案重做某一类（`kind` 为 character/prop/scene）全部未锁定的参考图，可选 `restyleSegments` |
 | `GET /dramas/:id/canvas` | 作品的精修画布：`canvasId` 为最近更新的关联画布（`canvas_projects.project_id` 等于作品 ID），没有时为空串，由前端新建画布并写入关联；`canvasCount` 为关联画布数 |
 | `POST /dramas/:id/canvas-assets` | `{ resources: [{ resourceId, title?, category? }] }`（1–64 项）为投送到画布的短剧媒体登记素材记录：画布保存要求媒体节点由当前用户的素材引用资源。素材 ID 由资源确定（`drama-<resourceId>`），同一资源只登记一次，只建素材入口不复制媒体。不存在、未就绪或不是图片/视频的资源跳过、不让整批失败；返回 `{ assets: [{ resourceId, assetId }] }`，缺少的资源由前端决定是否中止投送 |

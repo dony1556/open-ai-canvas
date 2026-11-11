@@ -108,6 +108,10 @@ func (s *Service) AdminArkAssets(ctx context.Context, actor *model.User, query A
 	if err != nil {
 		return nil, err
 	}
+	return listExistingArkAssets(ctx, setting, query)
+}
+
+func listExistingArkAssets(ctx context.Context, setting arkPrivateAssetSettingValue, query AdminArkAssetQuery) (*AdminArkAssetPage, error) {
 	payload, err := arkAssetListPayload(query, setting.ProjectName)
 	if err != nil {
 		return nil, err

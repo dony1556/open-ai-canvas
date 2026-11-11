@@ -81,7 +81,7 @@ test("channel model fetch requires explicit selection before import", async () =
     ]);
     const component = compactSource(componentSource);
 
-    expect(apiSource).toContain("http.post<{ models: string[] }>(`/admin/channels/${encodeURIComponent(channelId)}/models/fetch`)");
+    expect(apiSource).toContain("http.post<ChannelCatalogDiff>(`/admin/channels/${encodeURIComponent(channelId)}/models/fetch`)");
     expect(apiSource).toContain("http.post<{ models: string[]; added: number }>(`/admin/channels/${encodeURIComponent(channelId)}/models/import`, { models })");
     expect(component).toContain('title="选择要导入的模型"');
     expect(component).toContain("默认勾选已存在的模型，新模型默认不勾选");
@@ -241,7 +241,12 @@ test("task-first settings reveal dependent configuration only after the primary 
     expect(arkSource).toContain('title="2. 视频生成时自动导入"');
     expect(arkSource).toContain("{prerequisitesReady || draftEnabled ? (");
     expect(arkSource).toContain('aria-label="自动导入可信参考素材，保存修改后生效"');
-    expect(arkSource).toContain('title="5. 已上传素材"');
+    expect(arkSource).not.toContain("<ArkAssetsManager");
+    expect(arkSource).not.toContain("<ArkAdminGroupsTab");
+    expect(arkSource).not.toContain("<ArkAdminReviewsTab");
+    expect(arkSource).toContain('title="5. 方舟素材库可见用户"');
+    expect(arkSource).toContain('name="libraryVisibleUserIds"');
+    expect(arkSource).toContain('name="libraryVisibleToAll"');
 
     expect(arkSource).toContain('title="3. 开放用户素材组"');
     expect(arkSource).toContain('aria-label="开放真人素材库，保存修改后生效"');

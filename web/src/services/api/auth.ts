@@ -66,6 +66,25 @@ export type RuntimeLimits = {
     recycleBinRetentionDays?: number;
 };
 
+export type ApiLogGenerationReference = {
+    id: string;
+    kind: "image" | "video" | "audio";
+    label: string;
+    name: string;
+    role?: string;
+    available: boolean;
+    unavailableReason?: string;
+    mediaUrl?: string;
+};
+
+export type ApiLogGenerationContent = {
+    prompt: string;
+    references: ApiLogGenerationReference[];
+    source: "snapshot" | "task" | "request";
+    incomplete: boolean;
+    note?: string;
+};
+
 export type ApiCallLog = {
     id: string;
     userId: string;
@@ -119,9 +138,14 @@ export type ApiCallLog = {
     requestContentType?: string;
     requestBody?: string;
     responseBody?: string;
+    generationContent?: ApiLogGenerationContent;
     startedAt?: string;
     createdAt: string;
 };
+
+export function adminApiLogReferenceMediaURL(logId: string, referenceId: string) {
+    return `${String(apiBaseURL).replace(/\/+$/, "")}/admin/api-logs/${encodeURIComponent(logId)}/references/${encodeURIComponent(referenceId)}/media`;
+}
 
 export type AdminProviderTaskQueryResult = {
     task: GenerationTask;
@@ -326,6 +350,8 @@ export type AdminOSSSetting = {
 };
 
 export type AdminArkPrivateAssetSetting = {
+    libraryVisibleToAll: boolean;
+    libraryVisibleUserIds: string[];
     /** Seedance 可信参考素材自动同步。 */
     enabled: boolean;
     /** 开放用户自建真人 / 虚拟素材组，与可信素材自动同步相互独立。 */
@@ -434,6 +460,7 @@ export type AuthSettings = VerificationPolicy & {
     firstUser: boolean;
     registrationEnabled: boolean;
     linuxdoEnabled: boolean;
+    oidcEnabled?: boolean;
     emailEnabled: boolean;
     emailCodeRequired: boolean;
     /** 注册必须填写邮箱。旧服务端未返回时按选填处理。 */
@@ -455,6 +482,12 @@ export function linuxDOLoginURL(next: string, acceptedTerms?: boolean) {
     const base = String(apiBaseURL).replace(/\/$/, "");
     const termsQuery = acceptedTerms === undefined ? "" : `&acceptedTerms=${acceptedTerms ? "true" : "false"}`;
     return `${base}/auth/linuxdo/start?next=${encodeURIComponent(next)}${termsQuery}`;
+}
+
+export function oidcLoginURL(next: string, acceptedTerms: boolean) {
+    const base = String(apiBaseURL).replace(/\/$/, "");
+    const query = new URLSearchParams({ next, acceptedTerms: String(acceptedTerms) });
+    return `${base}/auth/oidc/start?${query}`;
 }
 
 export function getAuthSession() {
@@ -606,7 +639,7 @@ export function importAdminChannels(payload: SystemChannelExport) {
     return http.post<SystemChannelImportResult>("/admin/channels/import", payload);
 }
 
-export function updateAdminChannel(id: string, input: Partial<ModelChannel> & { useGlobalConcurrency?: boolean }) {
+export function updateAdminChannel(id: string, input: Partial<ModelChannel> & { useGlobalConcurrency?: boolean; expectedUpdatedAt?: string }) {
     return http.patch<{ channel: ModelChannel }>(`/admin/channels/${encodeURIComponent(id)}`, input);
 }
 

@@ -6,7 +6,7 @@ import { useAdminUserOptions } from "../../components/use-admin-user-options";
 import { arkUserLabel } from "./ark-admin-shared";
 
 /** 平台素材组的授权用户：远程搜索用户，已选用户不在当前搜索结果里时保留名称。 */
-export function ArkGrantUsersField({ value, onChange, known, disabled }: { value: string[]; onChange: (ids: string[]) => void; known?: ArkUserSummary[]; disabled?: boolean }) {
+export function ArkGrantUsersField({ value = [], onChange, known, disabled }: { value?: string[]; onChange?: (ids: string[]) => void; known?: ArkUserSummary[]; disabled?: boolean }) {
     const users = useAdminUserOptions(undefined);
     const labels = useRef(new Map<string, string>());
     for (const user of known || []) labels.current.set(user.id, arkUserLabel(user));
@@ -27,7 +27,7 @@ export function ArkGrantUsersField({ value, onChange, known, disabled }: { value
             onSearch={users.onSearch}
             options={options}
             value={value}
-            onChange={(next) => onChange((next as string[]) || [])}
+            onChange={(next) => onChange?.((next as string[]) || [])}
             placeholder="搜索用户名或昵称"
             ariaLabel="授权用户"
             className="w-full"

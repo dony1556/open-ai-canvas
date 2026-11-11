@@ -30,7 +30,9 @@ const (
 )
 
 type ArkPrivateAssetSettingRequest struct {
-	Enabled bool `json:"enabled"`
+	LibraryVisibleToAll   bool     `json:"libraryVisibleToAll"`
+	LibraryVisibleUserIDs []string `json:"libraryVisibleUserIds"`
+	Enabled               bool     `json:"enabled"`
 	// RealEnabled / VirtualEnabled 分别开放用户自助创建真人、虚拟素材组；与可信素材自动同步（Enabled）相互独立。
 	RealEnabled                   bool   `json:"realEnabled"`
 	VirtualEnabled                bool   `json:"virtualEnabled"`
@@ -51,6 +53,8 @@ type ArkPrivateAssetSettingRequest struct {
 }
 
 type PublicArkPrivateAssetSetting struct {
+	LibraryVisibleToAll           bool      `json:"libraryVisibleToAll"`
+	LibraryVisibleUserIDs         []string  `json:"libraryVisibleUserIds"`
 	Enabled                       bool      `json:"enabled"`
 	RealEnabled                   bool      `json:"realEnabled"`
 	VirtualEnabled                bool      `json:"virtualEnabled"`
@@ -74,24 +78,26 @@ type PublicArkPrivateAssetSetting struct {
 }
 
 type arkPrivateAssetSettingValue struct {
-	Enabled                       bool   `json:"enabled"`
-	RealEnabled                   bool   `json:"realEnabled"`
-	VirtualEnabled                bool   `json:"virtualEnabled"`
-	RealGroupLimit                int    `json:"realGroupLimit"`
-	VirtualGroupLimit             int    `json:"virtualGroupLimit"`
-	BillingEnabled                bool   `json:"billingEnabled"`
-	RealGroupPriceMicrocredits    int64  `json:"realGroupPriceMicrocredits"`
-	VirtualGroupPriceMicrocredits int64  `json:"virtualGroupPriceMicrocredits"`
-	RealReviewRequired            bool   `json:"realReviewRequired"`
-	VirtualReviewRequired         bool   `json:"virtualReviewRequired"`
-	RealAuthorizationDays         int    `json:"realAuthorizationDays"`
-	Site                          string `json:"site"`
-	CallbackBaseURL               string `json:"callbackBaseUrl"`
-	Region                        string `json:"region"`
-	ProjectName                   string `json:"projectName"`
-	AccessKeyID                   string `json:"accessKeyId"`
-	AccessKeySecret               string `json:"accessKeySecret"`
-	DefaultGroupID                string `json:"defaultGroupId"`
+	LibraryVisibleToAll           bool     `json:"libraryVisibleToAll"`
+	LibraryVisibleUserIDs         []string `json:"libraryVisibleUserIds"`
+	Enabled                       bool     `json:"enabled"`
+	RealEnabled                   bool     `json:"realEnabled"`
+	VirtualEnabled                bool     `json:"virtualEnabled"`
+	RealGroupLimit                int      `json:"realGroupLimit"`
+	VirtualGroupLimit             int      `json:"virtualGroupLimit"`
+	BillingEnabled                bool     `json:"billingEnabled"`
+	RealGroupPriceMicrocredits    int64    `json:"realGroupPriceMicrocredits"`
+	VirtualGroupPriceMicrocredits int64    `json:"virtualGroupPriceMicrocredits"`
+	RealReviewRequired            bool     `json:"realReviewRequired"`
+	VirtualReviewRequired         bool     `json:"virtualReviewRequired"`
+	RealAuthorizationDays         int      `json:"realAuthorizationDays"`
+	Site                          string   `json:"site"`
+	CallbackBaseURL               string   `json:"callbackBaseUrl"`
+	Region                        string   `json:"region"`
+	ProjectName                   string   `json:"projectName"`
+	AccessKeyID                   string   `json:"accessKeyId"`
+	AccessKeySecret               string   `json:"accessKeySecret"`
+	DefaultGroupID                string   `json:"defaultGroupId"`
 }
 
 // credentialsReady 表示站点、项目与 IAM 凭据完整，可以调用方舟控制面。
@@ -154,6 +160,11 @@ func (s *Service) UpdateArkPrivateAssetSetting(actor *model.User, req ArkPrivate
 	if err != nil {
 		return nil, err
 	}
+	if len(next.LibraryVisibleUserIDs) > 0 {
+		if _, err := s.validArkGrantUsers(next.LibraryVisibleUserIDs); err != nil {
+			return nil, err
+		}
+	}
 	if next.Site != current.Site || next.Region != current.Region || next.ProjectName != current.ProjectName || next.AccessKeyID != current.AccessKeyID {
 		// Asset groups belong to one Ark Project and credential scope. Recreate
 		// lazily after either boundary changes.
@@ -174,6 +185,7 @@ func (s *Service) UpdateArkPrivateAssetSetting(actor *model.User, req ArkPrivate
 		"realGroupLimit": next.RealGroupLimit, "virtualGroupLimit": next.VirtualGroupLimit,
 		"realReviewRequired": next.RealReviewRequired, "virtualReviewRequired": next.VirtualReviewRequired, "realAuthorizationDays": next.RealAuthorizationDays,
 		"site": next.Site, "region": next.Region, "projectName": next.ProjectName,
+		"libraryVisibleToAll": next.LibraryVisibleToAll, "libraryVisibleUsers": len(next.LibraryVisibleUserIDs),
 	}); err != nil {
 		return nil, err
 	}
@@ -228,6 +240,8 @@ func (s *Service) saveArkPrivateAssetSetting(setting *model.SystemSetting, value
 func arkPrivateAssetSettingFromRequest(req ArkPrivateAssetSettingRequest, current arkPrivateAssetSettingValue) (arkPrivateAssetSettingValue, error) {
 	next := normalizeArkPrivateAssetSetting(arkPrivateAssetSettingValue{
 		Enabled:                       req.Enabled,
+		LibraryVisibleToAll:           req.LibraryVisibleToAll,
+		LibraryVisibleUserIDs:         req.LibraryVisibleUserIDs,
 		RealEnabled:                   req.RealEnabled,
 		VirtualEnabled:                req.VirtualEnabled,
 		RealGroupLimit:                req.RealGroupLimit,
@@ -247,6 +261,9 @@ func arkPrivateAssetSettingFromRequest(req ArkPrivateAssetSettingRequest, curren
 	})
 	if next.AccessKeySecret == "" && next.AccessKeyID == current.AccessKeyID {
 		next.AccessKeySecret = current.AccessKeySecret
+	}
+	if len(next.LibraryVisibleUserIDs) > maxArkGrantUsers {
+		return next, BadAuthRequest("素材库最多指定 500 位可见用户，更多用户请选择全部用户")
 	}
 	// 上限与有效期为 0 表示沿用当前值；负数或超出范围直接拒绝。
 	if req.RealGroupLimit < 0 || req.RealGroupLimit > maxArkGroupLimit || req.VirtualGroupLimit < 0 || req.VirtualGroupLimit > maxArkGroupLimit {
@@ -302,6 +319,10 @@ func arkPrivateAssetSettingFromRequest(req ArkPrivateAssetSettingRequest, curren
 }
 
 func normalizeArkPrivateAssetSetting(value arkPrivateAssetSettingValue) arkPrivateAssetSettingValue {
+	value.LibraryVisibleUserIDs = uniqueStrings(value.LibraryVisibleUserIDs)
+	if value.LibraryVisibleUserIDs == nil {
+		value.LibraryVisibleUserIDs = []string{}
+	}
 	value.Site = strings.ToLower(strings.TrimSpace(value.Site))
 	if value.Site == "" {
 		value.Site = arkSiteVolcengine
@@ -326,6 +347,7 @@ func normalizeArkPrivateAssetSetting(value arkPrivateAssetSettingValue) arkPriva
 
 func defaultArkPrivateAssetSetting() arkPrivateAssetSettingValue {
 	return arkPrivateAssetSettingValue{
+		LibraryVisibleUserIDs: []string{},
 		RealGroupLimit:        defaultArkRealGroupLimit,
 		VirtualGroupLimit:     defaultArkVirtualGroupLimit,
 		RealReviewRequired:    true,
@@ -336,6 +358,8 @@ func defaultArkPrivateAssetSetting() arkPrivateAssetSettingValue {
 
 func publicArkPrivateAssetSetting(setting *model.SystemSetting, value arkPrivateAssetSettingValue) PublicArkPrivateAssetSetting {
 	result := PublicArkPrivateAssetSetting{
+		LibraryVisibleToAll:           value.LibraryVisibleToAll,
+		LibraryVisibleUserIDs:         value.LibraryVisibleUserIDs,
 		Enabled:                       value.Enabled,
 		RealEnabled:                   value.RealEnabled,
 		VirtualEnabled:                value.VirtualEnabled,
