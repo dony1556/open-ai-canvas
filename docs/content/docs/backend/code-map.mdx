@@ -5,6 +5,20 @@ description: 从产品功能快速定位主要代码入口
 
 # 代码功能地图
 
+## 创作对话同步
+
+- HTTP：`handler/creation_history.go` → `service/aliases_creation_history.go` → `app/creation_history.go`；持久化在 `repository/creation_history.go` 和 `model/creation_history.go`。
+- Web：`services/creation-history-sync.ts` 维护账号队列、修订合并及冲突备份；`creation-history-payload.ts` 定义可持久化字段，`creation-history-media.ts` 上传本地媒体并恢复授权路径；真实入口为 `pages/create/index.tsx`。
+- 迁移：Schema 101；资源引用保护在 `repository/resource_reference.go` 和 `resource_cleanup.go`，SQLite → PostgreSQL 复制清单登记三张历史表。
+
+## Agent 记忆、Pi 与 MCP
+
+- 用户工作回忆：`app/cloud_agent_memory_recall.go`、`repository/agent_memory_recall.go`；长期偏好沿用 `cloud_agent_memory_document*.go`。冻结注入在 `cloud_agent_skill_catalog.go`，按需检索工具为 `memory_search`。
+- Pi `1.5.2` 与真实运行回归：`backend/agent-runtime/pi/agent-runtime.mjs`、`agent-runtime.compaction.test.mjs`；受管模型桥、真实 Token 计量和缓存前缀在 `app/cloud_agent_pi_model.go`。
+- MCP HTTP 接口：`handler/mcp.go` → `service/aliases_mcp.go` → `app/mcp.go`；领域实现 `internal/integrations/mcp/`，持久化 `repository/mcp.go`、`model/models_mcp.go`，追加迁移 100 在 `database/migration_mcp.go`。
+- MCP 工具发现、审批预览与执行：`app/cloud_agent_tools_mcp.go`；分类与 Schema 仍使用统一工具注册表。外部 IO 在检查点事务外执行，独立回执防止重复调用。
+- 前端：`web/src/components/mcp/` 与 `services/api/agent-mcp.ts`；个人入口在 Agent 设置，平台市场和连接在 `pages/admin/mcp/`。
+
 ## 网站访问统计
 
 - 匿名采集与分类：`web/src/lib/site-traffic.ts`、`services/site-traffic.ts`；后台路由 `/admin/traffic` 在 `pages/admin/traffic/`，API 校验在 `services/api/site-traffic.ts`，三类 CSV 在 `traffic-csv.ts`。
@@ -28,6 +42,8 @@ description: 从产品功能快速定位主要代码入口
 ## 前端主题包
 
 主题登记与切换在 `web/src/themes/`：`registry.ts` 按皮肤 ID 查找，`load.ts` 自动载入，`apply.ts` 处理画布预设还原与品牌变量。各主题目录封装助手形象、空状态、404、字体和样式，静态资源在 `web/public/themes/`。入口通过 `application.tsx` 加载；后台外观提交在 `stores/use-appearance-store.ts` 应用当前主题。使用与扩展说明见 `web/src/themes/README.md`。
+
+龙影水墨和云鹤仙观的皮肤参数由前端主题包与 `backend/internal/app/appearance_skins.go` 共用 `appearance_theme_packs.json`。读取旧版外观配置时，`appearance.go` 按皮肤库剩余容量补入缺少的主题，直到管理员保存新版配置。
 
 ## 渠道配置与媒体参数
 
@@ -130,6 +146,7 @@ description: 从产品功能快速定位主要代码入口
 
 - 对话呈现：`web/src/components/canvas/canvas-cloud-agent-panel-parts.tsx` 管理可点击的对话标题、历史入口及唯一主要执行状态；`canvas-cloud-agent-chat-ui.tsx` 管理正文、折叠过程、审批与错误。`AgentConversation` 在历史恢复完成的空会话内挂载原版 `canvas-agent-welcome.tsx`，使用 `agent-welcome` 光球、居中欢迎文案与三个入口；创作入口只填草稿，技能入口打开真实技能库；场景技能组合在 `canvas-agent-skill-library-modal.tsx` 的 `presets` 插槽中，仅主动打开技能库时呈现。
 - 默认停靠：`lib/canvas/agent-panel-dock.ts` 默认选择右侧栏；`components/canvas/use-agent-panel-dock.ts` 与 `layouts/user-layout.tsx` 共用可用宽度条件，保留已保存的浮窗偏好和窄屏回退。
+- 推理档位：`web/src/components/canvas/use-agent-reasoning-preference.ts` 按账号与模型保存 Agent 档位，面板恢复时根据当前模型能力校验。没有有效选择时提交 `auto`，由模型配置决定默认档位。
 - 底部工具条：`canvas-toolbar.tsx`、`canvas-zoom-controls.tsx` 使用 `FloatingDock` 的局部 `toolbar` 变体；`canvas-bottom-toolbar.css` 负责紧凑实色外观，缩放控件按主条实测宽高和侧栏占位避让；节点/连线计数与镜头跟随浮条已移除。
 - 默认纯白：`styles/globals.css` 的 `--background`、`lib/canvas-theme.ts` 的浅色画布及 `lib/canvas/canvas-appearance.ts` 的经典浅色预设统一为 `#FFFFFF`。已有自定义配色和暗色独立保留。
 - 交互回归：`web/test/agent-sidebar-presentation.test.tsx` 的独立 DOM 用例覆盖停靠、草稿、单一执行状态和审批边界；底部控件真实组件用例在 `web/test/fixtures/canvas-bottom-controls.harness.tsx`。
