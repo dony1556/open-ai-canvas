@@ -397,6 +397,19 @@ const SPECS: Spec[] = [
 
     // ===== 3D 动画 =====
     {
+        id: "3d-urban-daily",
+        name: "3D 动画 · 都市日常",
+        category: "3d",
+        tags: ["现代", "日常", "青春", "3D写实"],
+        description: "国产 3D 写实 CG，清新明亮的现代都市生活，涵盖校园、街区、商场与居家场景。",
+        palette: ["#bae6fd", "#fef3c7", "#fce7f3"],
+        medium: "国产 3D 写实 CG 渲染，UE5 引擎超高清画质，极致细节，人物建模精致细腻，真实的皮肤纹理与毛发质感，场景细节丰富逼真，画面通透",
+        world: "现代都市生活。校园类：现代高中教室（靠窗）、阳光走廊、图书馆、操场与天台；城市生活类：繁华商业街、大型商场内部、街角咖啡厅、樱花或落叶街道、公园长椅、地铁站与公交站；室内居家类：温馨少女卧室、现代公寓客厅、厨房、阳台；特殊类：纯白摄影棚背景，仅用于角色立绘展示。具体场景由当前剧情与分镜决定",
+        look: "整体清新明亮，根据场景切换光影氛围：街道与教室采用午后阳光暖调，商场采用冷白人工照明，居家采用暖黄氛围灯，繁华夜景采用夜色霓虹。柔和的自然光与真实室内光，保持电影级景深，人物面部始终带有细腻轮廓光",
+        wardrobe: "现代都市日常风，包含 JK 制服体系、休闲私服（针织衫、连衣裙、T恤）、居家服饰（睡衣、宽松卫衣）与外出配件（包包、雨伞、耳机）。具体穿戴由分镜中的角色设定决定，保持风格统一",
+        forbid: "二次元平面画风（2D平涂）、低模与粗糙建模、人物面部崩坏（异形脸）、肢体扭曲、多余的手指、背景杂乱模糊",
+    },
+    {
         id: "3d-guoman",
         name: "3D 国漫仙侠",
         category: "3d",
@@ -948,7 +961,25 @@ export function findDramaStyle(id: string): DramaStyle | undefined {
 const PRESET_THEME_GROUPS: Array<{ themeId: DramaStyleThemeId; ids: string[] }> = [
     {
         themeId: "urban",
-        ids: ["live-ceo", "live-heiress", "live-rebirth", "live-warlord", "live-doctor", "live-workplace", "live-family", "live-neo-chinese", "live-food", "3d-pixar", "3d-pet", "2d-webtoon", "2d-manhua", "2d-comic", "2d-flat", "2d-chibi"],
+        ids: [
+            "live-ceo",
+            "live-heiress",
+            "live-rebirth",
+            "live-warlord",
+            "live-doctor",
+            "live-workplace",
+            "live-family",
+            "live-neo-chinese",
+            "live-food",
+            "3d-urban-daily",
+            "3d-pixar",
+            "3d-pet",
+            "2d-webtoon",
+            "2d-manhua",
+            "2d-comic",
+            "2d-flat",
+            "2d-chibi",
+        ],
     },
     { themeId: "romance", ids: ["live-sweet", "live-flash", "live-baby", "live-tearjerker", "2d-ancient-sweet", "2d-shoujo"] },
     { themeId: "xuanhuan", ids: ["live-xianxia", "3d-guoman", "3d-xuanhuan", "3d-myth", "2d-guofeng", "art-papercut", "art-guochao-landscape"] },
