@@ -295,14 +295,13 @@ func (s StoryboardSettings) ShotMs(hintSeconds float64, dialogue string) int64 {
 	return s.fitDialogue(max(low, min(high, target)), dialogue)
 }
 
-// ImportedShotMs 计算用户分镜里的镜头时长：写了秒数就按写的执行（与手动改时长同为 1–60 秒），
-// 不按镜头节奏夹紧；没写时按节奏规则估算。台词同样只会把镜头拉长，保证逐字台词说得完。
+// ImportedShotMs 保留原稿明确时长，包括亚秒镜头；只有未填写时才按节奏与台词估算。
+// 导入边界负责拒绝无效和超限时长，不能用语速估计覆盖原片时间依据。
 func (s StoryboardSettings) ImportedShotMs(seconds float64, dialogue string) int64 {
 	if seconds <= 0 {
 		return s.ShotMs(0, dialogue)
 	}
-	target := max(1000, min(int64(MaxStoryboardShotSeconds)*1000, int64(math.Round(seconds*1000))))
-	return s.fitDialogue(target, dialogue)
+	return max(1, int64(math.Round(seconds*1000)))
 }
 
 // SpokenMs 是说完一句台词所需的时长（含气口）；没有台词为 0。

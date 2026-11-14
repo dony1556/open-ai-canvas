@@ -63,7 +63,7 @@ func agentLifecycleRepositories(t *testing.T, driver string) (*Repository, *Repo
 		return New(db)
 	}
 	a, b := open(), open()
-	if err := a.db.AutoMigrate(&model.CanvasProject{}, &model.Task{}, &model.CloudAgentExecution{}, &model.CloudAgentEventRecord{}, &model.CloudAgentMessageRecord{}, &model.CanvasEditLease{}, &model.CanvasSnapshot{}, &model.CanvasShare{}, &model.CanvasUnitLink{}); err != nil {
+	if err := a.db.AutoMigrate(&model.CanvasProject{}, &model.Task{}, &model.CloudAgentExecution{}, &model.CloudAgentEventRecord{}, &model.CloudAgentMessageRecord{}, &model.CloudAgentPiSession{}, &model.CloudAgentCanvasMutation{}, &model.AgentStorageUsage{}, &model.CanvasEditLease{}, &model.CanvasSnapshot{}, &model.CanvasShare{}, &model.CanvasUnitLink{}); err != nil {
 		t.Fatal(err)
 	}
 	return a, b
@@ -188,7 +188,8 @@ func TestCloudAgentAdmissionAndCanvasDeletionAcrossConnections(t *testing.T) {
 				admitted, deleted := make(chan error, 1), make(chan error, 1)
 				go func() {
 					<-start
-					admitted <- admission.CreateTaskWithActiveLimit(&model.Task{ID: runID, UserID: "user", ProjectID: canvasID, Operation: "cloud_agent", Status: model.TaskStatusTextReplay}, 100)
+					// Eight iterations may retain runs; isolate the canvas race from the default five-run quota.
+					admitted <- admission.CreateTaskWithActiveLimit(&model.Task{ID: runID, UserID: "user", ProjectID: canvasID, Operation: "cloud_agent", Status: model.TaskStatusTextReplay}, 100, 8)
 				}()
 				go func() {
 					<-start

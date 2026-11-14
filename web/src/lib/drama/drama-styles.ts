@@ -20,7 +20,7 @@ export type DramaStyle = {
     detail: { medium: string; world: string; look: string; wardrobe: string; forbid: string };
 };
 
-type Spec = Omit<DramaStyle, "prompt" | "detail"> & { medium?: string; world: string; look: string; wardrobe: string; forbid?: string };
+type Spec = Omit<DramaStyle, "prompt" | "detail"> & { medium?: string; world: string; look: string; wardrobe: string; forbid?: string; prompt?: string };
 
 export const DRAMA_STYLE_CATEGORIES: Array<{ key: "all" | "hot" | DramaStyleCategory; label: string }> = [
     { key: "hot", label: "爆款" },
@@ -400,14 +400,15 @@ const SPECS: Spec[] = [
         id: "3d-urban-daily",
         name: "3D 动画 · 都市日常",
         category: "3d",
-        tags: ["现代", "日常", "青春", "3D写实"],
-        description: "国产 3D 写实 CG，清新明亮的现代都市生活，涵盖校园、街区、商场与居家场景。",
+        tags: ["现代", "日常", "青春", "2.5D半写实", "国漫CG"],
+        description: "2.5D 半写实精致 CG，国漫/韩漫高定画风与 BJD 娃娃质感，清新明亮的现代都市日常。",
         palette: ["#bae6fd", "#fef3c7", "#fce7f3"],
-        medium: "国产 3D 写实 CG 渲染，UE5 引擎超高清画质，极致细节，人物建模精致细腻，真实的皮肤纹理与毛发质感，场景细节丰富逼真，画面通透",
-        world: "现代都市生活。校园类：现代高中教室（靠窗）、阳光走廊、图书馆、操场与天台；城市生活类：繁华商业街、大型商场内部、街角咖啡厅、樱花或落叶街道、公园长椅、地铁站与公交站；室内居家类：温馨少女卧室、现代公寓客厅、厨房、阳台；特殊类：纯白摄影棚背景，仅用于角色立绘展示。具体场景由当前剧情与分镜决定",
-        look: "整体清新明亮，根据场景切换光影氛围：街道与教室采用午后阳光暖调，商场采用冷白人工照明，居家采用暖黄氛围灯，繁华夜景采用夜色霓虹。柔和的自然光与真实室内光，保持电影级景深，人物面部始终带有细腻轮廓光",
-        wardrobe: "现代都市日常风，包含 JK 制服体系、休闲私服（针织衫、连衣裙、T恤）、居家服饰（睡衣、宽松卫衣）与外出配件（包包、雨伞、耳机）。具体穿戴由分镜中的角色设定决定，保持风格统一",
-        forbid: "二次元平面画风（2D平涂）、低模与粗糙建模、人物面部崩坏（异形脸）、肢体扭曲、多余的手指、背景杂乱模糊",
+        medium: "2.5D 半写实精致 CG 渲染，国漫/韩漫高定画风，BJD娃娃质感。人物五官极其精致（二次元比例），皮肤无瑕透亮，发丝分明，身材修长。拒绝纯真人写实，保留精致的动漫唯美感",
+        world: "校园类：现代高中教室（靠窗）、阳光走廊、图书馆、操场/天台。城市生活类：繁华商业街、大型商场内部、街角咖啡厅、樱花/落叶街道、公园长椅、地铁站/公交站。室内居家类：温馨少女卧室、现代公寓客厅、厨房、阳台。特殊类：纯白摄影棚背景（用于角色立绘展示，配柔光箱打光）",
+        look: "整体清新明亮。根据场景切换光影氛围：午后阳光的暖调（街道/教室）、商场冷白的人工照明（商场）、居家暖黄的氛围灯（家里）。人物面部必须有强烈的轮廓光（Rim light），皮肤带有高级的漫反射与微弱的陶瓷光泽，电影级景深（背景适度虚化突出人物）",
+        wardrobe: "现代都市日常风。包含JK制服体系、休闲私服（针织衫、连衣裙）、居家服饰（睡衣）、外出配件。服装材质需呈现精致的3D建模感（如衬衫的硬挺、毛衣的柔软），避免真实衣物的褶皱粗糙感",
+        forbid: "过度写实、毛孔粗糙、欧美写实风、二次元2D平涂、低模/粗糙建模、异形脸、肢体穿模、多余的手指、背景杂乱模糊",
+        prompt: "2.5D 半写实精致 CG 渲染，国漫唯美画风，BJD娃娃质感，二次元精致五官，无瑕透亮肌肤。题材场景：现代都市生活（商场/街道/咖啡厅/居家/校园等）。色彩光影：清新明亮色调，影棚级柔光，人物面部细腻轮廓光，皮肤带陶瓷微反光，电影级景深。（强制约束词：绝对不要真人照片质感，保持3D动漫CG感）。 禁止：真人摄影、过度写实、粗糙毛孔、二次元平涂、低模、穿模、崩坏、文字水印。",
     },
     {
         id: "3d-guoman",
@@ -946,9 +947,9 @@ const SPECS: Spec[] = [
 ];
 
 function compile(spec: Spec): DramaStyle {
-    const { medium, world, look, wardrobe, forbid, ...style } = spec;
+    const { medium, world, look, wardrobe, forbid, prompt: customPrompt, ...style } = spec;
     const detail = { medium: medium || MEDIUM[spec.category], world, look, wardrobe, forbid: `${FORBID[spec.category]}${forbid ? `、${forbid}` : ""}` };
-    const prompt = [detail.medium, `题材场景：${world}`, `色彩光影：${look}`, `服化道：${wardrobe}`, `禁止：${detail.forbid}`].join("。");
+    const prompt = customPrompt || [detail.medium, `题材场景：${world}`, `色彩光影：${look}`, `服化道：${wardrobe}`, `禁止：${detail.forbid}`].join("。");
     return { ...style, prompt, detail };
 }
 

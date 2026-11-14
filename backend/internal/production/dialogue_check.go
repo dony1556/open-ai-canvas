@@ -101,7 +101,7 @@ func SourceDialogueLines(text string, format string) []string {
 	format = NormalizeSourceFormat(format)
 	candidates := []string{}
 	if format == SourceStoryboard {
-		if shots, ok := ParseStoryboardSource(text); ok {
+		if shots, ok, err := ParseStoryboardSource(text); ok && err == nil {
 			for _, shot := range shots {
 				if shot.Dialogue != "" {
 					candidates = append(candidates, shot.Dialogue)

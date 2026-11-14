@@ -299,6 +299,7 @@ export function StoryboardRules({
                     <div className="drama-sbrules-duration">
                         <EpisodeDurationInput value={episodeSeconds} onChange={onEpisodeSecondsChange} />
                     </div>
+                    <span className="drama-sbrules-hint">用于改编时参考；导入分镜有明确时长时以原稿为准，不会自动调整已有镜头。</span>
                 </div>
             ) : null}
             <div className="drama-sbrules-row">

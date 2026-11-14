@@ -1127,7 +1127,7 @@ export function ApprovalPreviewItemView({ item, theme, onFocusNode }: { item: Re
                   ? "整理"
                   : item.operation === "create_storyboard"
                     ? "创建分镜"
-                    : item.operation === "edit_storyboard"
+                    : item.operation === "edit_storyboard" || item.operation === "update_drama_shot"
                       ? "修改分镜"
                       : item.operation === "create_character"
                         ? "创建角色卡"
@@ -1146,7 +1146,7 @@ export function ApprovalPreviewItemView({ item, theme, onFocusNode }: { item: Re
                 {typeLabel ? <span className="canvas-agent-approval-node-type">{typeLabel}</span> : null}
             </>
         );
-        return id && onFocusNode ? (
+        return id && onFocusNode && item.operation !== "update_drama_shot" ? (
             <button type="button" className="canvas-agent-approval-node canvas-agent-approval-node-button" onClick={() => onFocusNode(id)} title="定位到画布节点">
                 {content}
             </button>
@@ -1188,7 +1188,16 @@ export function ApprovalPreviewItemView({ item, theme, onFocusNode }: { item: Re
                     ))}
                 </div>
             ) : null}
-            {item.details?.length ? (
+            {item.details?.length && item.operation === "update_drama_shot" ? (
+                <details className="canvas-agent-approval-shot-details">
+                    <summary>查看修改前后</summary>
+                    <div>
+                        {item.details.map((detail) => (
+                            <p key={detail}>{detail}</p>
+                        ))}
+                    </div>
+                </details>
+            ) : item.details?.length ? (
                 <div className="canvas-agent-approval-detail-list">
                     {item.details.map((detail) => (
                         <span key={detail}>{detail}</span>

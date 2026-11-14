@@ -21,6 +21,11 @@ test("search matches names and tags across categories", () => {
 test("urban daily 3D preset preserves its art direction and is searchable", () => {
     const style = findDramaStyle("3d-urban-daily")!;
     assert.deepEqual(getDramaStyleComposition(style.id), { formId: "3d", themeId: "urban" });
-    for (const query of ["都市日常", "现代", "青春", "3D写实"]) assert.ok(filterDramaStyles("3d", query).includes(style), query);
-    for (const text of ["国产 3D 写实 CG", "UE5", "商场", "地铁站", "厨房", "纯白摄影棚", "仅用于角色立绘展示", "电影级景深", "具体穿戴由分镜中的角色设定决定", "真人照片质感", "2D平涂", "穿模", "文字水印"]) assert.ok(style.prompt.includes(text), text);
+    assert.deepEqual(style.tags, ["现代", "日常", "青春", "2.5D半写实", "国漫CG"]);
+    for (const query of ["都市日常", "现代", "青春", "2.5D半写实", "国漫CG"]) assert.ok(filterDramaStyles("3d", query).includes(style), query);
+    assert.match(style.detail.world, /纯白摄影棚背景（用于角色立绘展示，配柔光箱打光）/);
+    assert.match(style.detail.look, /强烈的轮廓光（Rim light）/);
+    assert.match(style.detail.wardrobe, /避免真实衣物的褶皱粗糙感/);
+    for (const text of ["2.5D 半写实精致 CG", "BJD娃娃质感", "二次元精致五官", "无瑕透亮肌肤", "皮肤带陶瓷微反光", "绝对不要真人照片质感，保持3D动漫CG感", "粗糙毛孔", "文字水印"]) assert.ok(style.prompt.includes(text), text);
+    assert.doesNotMatch(JSON.stringify(style), /UE5|真实的皮肤纹理|3D写实/);
 });

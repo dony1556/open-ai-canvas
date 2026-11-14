@@ -1123,7 +1123,10 @@ func (r *dramaRun) applyDirectStoryboard(e *model.DramaEpisode) (bool, error) {
 	for _, chapter := range chapters {
 		texts = append(texts, chapter.Text)
 	}
-	scripted, ok := production.ParseStoryboardSource(strings.Join(texts, "\n"))
+	scripted, ok, parseErr := production.ParseStoryboardSource(strings.Join(texts, "\n"))
+	if parseErr != nil {
+		return true, r.s.repo.UpdateDramaEpisodeUser(e.ID, map[string]any{"error": "分镜导入失败：" + parseErr.Error()})
+	}
 	if !ok {
 		return false, nil
 	}
@@ -1261,6 +1264,9 @@ func (r *dramaRun) applyScriptShots(episode *model.DramaEpisode, scripted []prod
 	var total int64
 	for i := range shots {
 		if limit > 0 && shots[i].DurationMs > limit {
+			if imported {
+				return fmt.Errorf("第 %d 镜原稿时长 %.3f 秒超过视频模型单次上限 %.3f 秒，请先拆镜或换模型", i+1, float64(shots[i].DurationMs)/1000, float64(limit)/1000)
+			}
 			shots[i].DurationMs = limit
 		}
 		total += shots[i].DurationMs

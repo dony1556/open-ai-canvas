@@ -26,6 +26,30 @@ func TestReferenceTokensNormalizeAndFlagUnknownNumbers(t *testing.T) {
 	}
 }
 
+func TestRewriteReferenceTokensKeepsAssetIdentityWhenOrderChanges(t *testing.T) {
+	prompt := "@参考图1站在参考图 2前，参考图10保持不变。"
+	got := RewriteReferenceTokens(prompt, map[string]string{"参考图1": "参考图2", "参考图2": "参考图1"})
+	if got != "参考图2站在参考图1前，参考图10保持不变。" {
+		t.Fatalf("references must be rewritten once without collisions: %q", got)
+	}
+}
+
+func TestSegmentVideoPromptKeepsReferencesForSameNameAssets(t *testing.T) {
+	prompt := SegmentVideoPrompt(SegmentPromptInput{
+		References: []SegmentReference{
+			{Label: "参考图1", Kind: "character", Name: "同名", Detail: "白衣青年"},
+			{Label: "参考图2", Kind: "prop", Name: "同名", Detail: "红色钥匙"},
+			{Label: "参考图3", Kind: "scene", Name: "同名", Detail: "蓝色房间"},
+		},
+		Shots: []SegmentShot{{DurationMs: 3000, Action: "青年拿起钥匙"}},
+	})
+	for _, label := range []string{"参考图1", "参考图2", "参考图3"} {
+		if !strings.Contains(prompt, "同名（"+label+"）") {
+			t.Fatalf("same names must not overwrite reference labels: %s", prompt)
+		}
+	}
+}
+
 func TestParsePlanCoversEveryChapterInBatch(t *testing.T) {
 	batch := []Chapter{{Index: 1, Title: "一", Text: "甲"}, {Index: 2, Title: "二", Text: "乙"}, {Index: 3, Title: "三", Text: "丙"}}
 	raw := `{"episodes":[{"title":"开端","chapters":[1,"2",9],"synopsis":"开端剧情"}]}`
@@ -108,14 +132,14 @@ func TestImportedShotKeepsWrittenDuration(t *testing.T) {
 	if got := rules.ImportedShotMs(8, ""); got != 8000 {
 		t.Fatalf("a storyboard's 8s shot must stay 8s instead of the 6s pacing cap, got %d", got)
 	}
-	if got := rules.ImportedShotMs(1, strings.Repeat("话", 18)); got != 4500 {
-		t.Fatalf("written duration still grows to fit the verbatim line, got %d", got)
+	if got := rules.ImportedShotMs(1, strings.Repeat("话", 18)); got != 1000 {
+		t.Fatalf("explicit imported timing must not grow from a speech estimate, got %d", got)
 	}
 	if got := rules.ImportedShotMs(0, ""); got != DefaultShotMs {
 		t.Fatalf("a missing duration falls back to the pacing estimate, got %d", got)
 	}
-	if got := rules.ImportedShotMs(90, ""); got != MaxStoryboardShotSeconds*1000 {
-		t.Fatalf("same 60s cap as manual edits, got %d", got)
+	if got := rules.ImportedShotMs(0.1, ""); got != 100 {
+		t.Fatalf("subsecond imported shot must retain its duration, got %d", got)
 	}
 }
 
