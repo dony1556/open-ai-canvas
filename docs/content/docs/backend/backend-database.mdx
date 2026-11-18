@@ -12,6 +12,11 @@ description: 影策后端核心持久化表与状态边界
 ### 方舟素材绑定删除状态
 
 `ark_private_asset_bindings.status` 增加业务状态 `deleted`，不涉及表结构迁移。后台成功删除方舟素材后保留绑定及原 ArkAssetID 供追溯，自动同步跳过该记录；用户显式手动上传时清空旧远端 ID 并重新创建。通用素材删除入口保护新版人像库记录；远端改名成功后同步 `ark_portrait_assets.name`，保留分组、授权与状态。方舟删除失败不修改绑定，系统原图不随远端副本删除。后台 `ark_private_assets.enabled` 仅控制自动导入，手动上传与管理按完整 IAM 配置及用户权限校验。
+
+## 对白同步与提示词核对
+
+沿用现有字段，无新增表或 Schema 迁移。`drama_segments.prompt_status` 新增 `conflict`（镜头已保存但无法安全同步，保留两份正文）及 `review`（AI 新稿生成后保留原手写稿，等待采用）。原因保存在 `prompt_error`。两种状态均不计为提示词就绪，不允许提交视频；显式确认正文后恢复。只修改对白时按唯一引语局部更新 `video_prompt_override`，没有手写稿时更新 `video_prompt`，同时递增修订号使迟到作业失效。
+
 ## 图片用量计费（Schema 105）
 
 版本 105 `image_usage_billing` 增加可空 JSON 文本列：`channel_model_price_tiers.image_pricing`、`cost_image_pricing`，`logical_models.image_pricing`，以及 `billing_orders.image_pricing`、`cost_image_pricing`、`image_usage`。订单另有 `image_input_images` 和 `image_max_output_images`，均为非空整数、默认 0。售价与内部成本分别保存，成本字段不向用户端序列化。
@@ -36,7 +41,7 @@ description: 影策后端核心持久化表与状态边界
 | `mcp_connections.allowed_user_ids_json` / `tool_policies_json` | 平台管理配置快照；每工具独立对象 JSON Schema 与远端输入 schema 同时校验；策略变更递增连接 revision |
 | `mcp_connections.tools_summary_json` | 有界工具摘要，列表查询不载入完整 `tools_json`；完整发现结果 schema 合计不超过 256 KiB |
 | `mcp_storage_usages` | 每用户 64 MiB 的 MCP 配置、凭据密文、工具快照和回执预算；包含有界元数据预留，调用领取回执前预留最多 48 KiB 结果空间 |
-| `agent_storage_usages` | 每用户 256 MiB 的状态、原生 JSONL、事件、消息及画布撤销正文账本；首次写入测量旧数据，此后在同一事务内按增量更新 |
+| `agent_storage_usages` | 每用户的状态、原生 JSONL、事件、消息及画布撤销正文账本；首次写入测量旧数据。上限取自运行时策略 `resource.agentHistoryMB`（默认 256 MiB），写入和管理员清理均在同一事务内更新账本，无需迁移 |
 | `mcp_tool_executions.status = expired` | 维护裁剪回执正文后保留身份和指纹，不再次执行外部操作；正在执行的回执不裁剪 |
 
 升级 103 会**停用全部旧 MCP 连接，包括个人连接**，清空检测结果、工具授权、平台用户名单和工具策略并递增 revision；保留加密凭据和执行回执，并为既有 MCP 数据初始化预算。用户须重新检测和授权；平台连接还须明确授权用户及参数范围。104 不删除既有 Agent 历史，超过额度的账号只能缩减或停止，不能继续增长历史。
@@ -387,7 +392,7 @@ SQLite 写事务与 PostgreSQL 行锁串行化同一对话的修订检查；读�
 | `drama_casts` | 全剧设定：角色（`kind=character`，含别名、外貌与声线 `voice_instructions`）、关键道具（`kind=prop`）和场景（`kind=scene`），当前参考图 `image_resource_id` 与状态 | 作品圣经建档；剧本里首次出现的人物、道具或地点即时建档，按标准名与别名归并；锁定后不再重新生成 |
 | `drama_episodes` | 集标题、大纲、钩子、悬念、素材类型 `source_format`（Schema 73）、阶段（queued → script → prompts → review → video → render → done）、`approved`（逐集确认模式下已确认本集提示词）、`media_released`、错误、成片资源、`final_stale`、`revision` | `(project_id, number)` 唯一；用户修改递增 `revision`，调度写入以 `revision` 为条件 |
 | `drama_shots` | 镜头脚本：剧情段 `segment_index` / `segment_title`、场景与场景设定 `scene_cast_id`、出场角色 `cast_ids_json`、关键道具 `prop_ids_json`、说话人、台词、动作、景别、运镜、转场 `transition`、时长、起幅画面 `image_prompt`、运动描述 `video_prompt`、原文出处 | 镜头只是撰写段提示词的素材，不产出媒体；修改后所在段的提示词与视频标记过期 |
-| `drama_segments` | 剧情段：模型撰写的完整视频提示词 `video_prompt`、撰写状态 `prompt_status`（空串待撰写、`running`、`ready`、`stale`、`failed`）与 `prompt_error`、撰写时的秒数 `prompt_seconds`、用户改写 `video_prompt_override`、按段视频模型 `video_model_json`、用户指定的参考图 `reference_cast_ids_json`（Schema 74）、视频状态 `video_status`、`video_resource_id`、`video_seconds`、`video_error`、本段视频最后一帧 `tail_frame_resource_id`、`revision` | `(episode_id, segment_index)` 唯一；剧本写入时建行，重新改编时重建；结果按 `revision` 条件写入，过期结果作废；某段视频变化会让后续已生成的段过期（它们承接的是旧最后一帧） |
+| `drama_segments` | 剧情段：模型撰写的完整视频提示词 `video_prompt`、撰写状态 `prompt_status`（空串待撰写、`running`、`ready`、`stale`、`conflict`、`review`、`failed`）与 `prompt_error`、撰写时的秒数 `prompt_seconds`、用户改写 `video_prompt_override`、按段视频模型 `video_model_json`、用户指定的参考图 `reference_cast_ids_json`（Schema 74）、视频状态 `video_status`、`video_resource_id`、`video_seconds`、`video_error`、本段视频最后一帧 `tail_frame_resource_id`、`revision` | `(episode_id, segment_index)` 唯一；剧本写入时建行，重新改编时重建；结果按 `revision` 条件写入，过期结果作废；某段视频变化会让后续已生成的段过期（它们承接的是旧最后一帧） |
 | `drama_takes` | 历史版本：设定参考图（`cast`）、剧情段视频（`video`，`owner_id` 为段 ID）与单集成片（`final`） | `(owner_id, kind)` 内递增 `version`；版本始终入库 |
 | `drama_jobs` | 调度队列：类型（bible/plan/cast_image/script/segment_prompt/segment_video/render）、目标、优先级、关联任务、重试次数、历次提交 `attempts_json`、错误、实际花费 | 任务在派发时才创建；`segment_prompt` / `segment_video` 的 `shot_id` 存放 `drama_segments.id` |
 
