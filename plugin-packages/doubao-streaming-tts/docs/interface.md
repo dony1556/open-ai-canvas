@@ -33,6 +33,7 @@
 | `create.method` | `"POST"` |
 | `create.path` | `"/api/v3/tts/create"` |
 | `create.contentType` | `"application/json"` |
+| `create.body.audio_mode` | `{"$if":{"condition":{"$gt":[{"$len":{"$ref":"request.audios"}},0]},"then":"unified_edit","else":{"$if":{"condition":{"$eq":[{"$ref":"request.extra.audioMode"},"unified_edit"]},"then":"unified_edit","else":"tts"}}}}` |
 | `create.body.model` | `{"$ref":"request.model"}` |
 | `create.body.text_prompt` | `{"$ref":"request.prompt"}` |
 | `create.body.references` | `{"$omitEmpty":{"$if":{"condition":{"$gt":[{"$len":{"$ref":"request.images"}},0]},"then":{"$map":{"from":{"$ref":"request.images"},"as":"media","in":{"image_url":{"$omitEmpty":{"$if":{"condition":{"$eq":[{"$ref":"media.source.type"},"url"]},"then":{"$ref":"media.url"},"else":null}}},"image_data":{"$omitEmpty":{"$if":{"condition":{"$eq":[{"$ref":"media.source.type"},"data"]},"then":{"$dataPayload":{"$ref":"media.value"}},"else":null}}}}}},"else":{"$if":{"condition":{"$gt":[{"$len":{"$ref":"request.audios"}},0]},"then":{"$concatArrays":[{"$map":{"from":{"$ref":"request.audios"},"as":"media","in":{"audio_url":{"$omitEmpty":{"$if":{"condition":{"$eq":[{"$ref":"media.source.type"},"url"]},"then":{"$ref":"media.url"},"else":null}}},"audio_data":{"$omitEmpty":{"$if":{"condition":{"$eq":[{"$ref":"media.source.type"},"data"]},"then":{"$dataPayload":{"$ref":"media.value"}},"else":null}}}}}},{"$if":{"condition":{"$and":[{"$ref":"request.extra.audioVoice"},{"$ne":[{"$ref":"request.extra.audioVoice"},"alloy"]},{"$lt":[{"$len":{"$ref":"request.audios"}},3]}]},"then":[{"speaker":{"$ref":"request.extra.audioVoice"}}],"else":[]}}]},"else":{"$if":{"condition":{"$and":[{"$ref":"request.extra.audioVoice"},{"$ne":[{"$ref":"request.extra.audioVoice"},"alloy"]}]},"then":[{"speaker":{"$ref":"request.extra.audioVoice"}}],"else":null}}}}}}}` |
@@ -74,7 +75,7 @@
   "apiVersion": "yingce.plugin/v2",
   "id": "doubao-streaming-tts",
   "name": "豆包音频生成",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "author": "Volcengine / 影策",
   "description": "豆包音频生成 独立请求协议插件。",
   "documentation": "<当前插件的完整 documentation，由 README.md 与 docs/interface.md 拼接而成；为避免 JSON 递归，此处不重复展开正文。>",
@@ -142,6 +143,35 @@
           "path": "/api/v3/tts/create",
           "contentType": "application/json",
           "body": {
+            "audio_mode": {
+              "$if": {
+                "condition": {
+                  "$gt": [
+                    {
+                      "$len": {
+                        "$ref": "request.audios"
+                      }
+                    },
+                    0
+                  ]
+                },
+                "then": "unified_edit",
+                "else": {
+                  "$if": {
+                    "condition": {
+                      "$eq": [
+                        {
+                          "$ref": "request.extra.audioMode"
+                        },
+                        "unified_edit"
+                      ]
+                    },
+                    "then": "unified_edit",
+                    "else": "tts"
+                  }
+                }
+              }
+            },
             "model": {
               "$ref": "request.model"
             },

@@ -12,6 +12,11 @@ description: 影策后端核心持久化表与状态边界
 ### 方舟素材绑定删除状态
 
 `ark_private_asset_bindings.status` 增加业务状态 `deleted`，不涉及表结构迁移。后台成功删除方舟素材后保留绑定及原 ArkAssetID 供追溯，自动同步跳过该记录；用户显式手动上传时清空旧远端 ID 并重新创建。通用素材删除入口保护新版人像库记录；远端改名成功后同步 `ark_portrait_assets.name`，保留分组、授权与状态。方舟删除失败不修改绑定，系统原图不随远端副本删除。后台 `ark_private_assets.enabled` 仅控制自动导入，手动上传与管理按完整 IAM 配置及用户权限校验。
+## 图片用量计费（Schema 105）
+
+版本 105 `image_usage_billing` 增加可空 JSON 文本列：`channel_model_price_tiers.image_pricing`、`cost_image_pricing`，`logical_models.image_pricing`，以及 `billing_orders.image_pricing`、`cost_image_pricing`、`image_usage`。订单另有 `image_input_images` 和 `image_max_output_images`，均为非空整数、默认 0。售价与内部成本分别保存，成本字段不向用户端序列化。
+
+迁移只添加缺少的列，支持重复执行；历史订单的图片 JSON 保持空值，不反推或重算费用。实际用量在下载前持久化，结算和退款沿用订单状态条件、余额校验和账本事务。规则和 API 合同见[图片用量计费](/docs/backend/image-usage-billing)。
 
 ## 微信登录（Schema 102）
 
@@ -39,6 +44,12 @@ description: 影策后端核心持久化表与状态边界
 Agent 根任务准入按用户在同一数据库事务计数；PostgreSQL 使用用户 advisory lock，SQLite 先取写锁。统计包含未创建执行检查点的预留、`waiting_approval` / `waiting_user` 和 `cleanup_pending`，不依赖任务载体是否为 `text_replay`。存储账本先于执行行加锁；原生会话仍采用 revision CAS，超额写入整笔回滚。取消、失败标记和无正文增长的清理不需要新增历史空间。
 
 账本用于业务容量控制，不等于数据库物理文件大小。索引、WAL、备份、系统模板与数据库页空闲空间仍需部署监控。当前不自动删除用户历史；人工归档必须通过保持账本与幂等标记一致的维护事务，不能直接清空 MCP 执行表。升级前备份数据库和 `.settings-key`，回滚时恢复同一份备份，旧二进制不能直接使用 104 结构。
+
+## 官方素材扩展
+
+官方素材使用独立的 `yingce_schema_migrations` 四步扩展链，保留主线迁移版本与校验值。表包括 `official_assets`、`official_asset_imports` 和 `official_asset_recommendations`。角色快照及推荐授权版本、时间保存在扩展字段中。项目现有 `migrate-schema` 命令执行迁移，启动检查同时要求主线与扩展链完整。
+
+官方媒体由画布引用共享资源，不自动复制到个人库。推荐和官方快照参与资源保留检查。下架后的已有引用按用户、画布及服务端保存记录判断权限。升级前备份数据库与媒体；回滚使用匹配版本及备份，不直接删除迁移记录或共享资源。
 
 ## 创作对话同步（Schema 101）
 

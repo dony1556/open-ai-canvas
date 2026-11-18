@@ -29,3 +29,12 @@ test("urban daily 3D preset preserves its art direction and is searchable", () =
     for (const text of ["2.5D 半写实精致 CG", "BJD娃娃质感", "二次元精致五官", "无瑕透亮肌肤", "皮肤带陶瓷微反光", "绝对不要真人照片质感，保持3D动漫CG感", "粗糙毛孔", "文字水印"]) assert.ok(style.prompt.includes(text), text);
     assert.doesNotMatch(JSON.stringify(style), /UE5|真实的皮肤纹理|3D写实/);
 });
+
+test("gufeng romance preset retains its custom prompt and theme mapping", () => {
+    const style = findDramaStyle("live-gufeng-romance")!;
+    assert.equal(style.name, "古风短剧");
+    assert.deepEqual(getDramaStyleComposition(style.id), { formId: "realistic", themeId: "palace" });
+    for (const query of ["古风", "甜宠", "古装", "仙侠", "宫廷"]) assert.ok(filterDramaStyles("live", query).includes(style), query);
+    for (const text of ["真人实拍古风短剧质感", "暖金与月白", "仙侠忌浓艳暖色", "宫廷忌轻浮休闲装束"]) assert.ok(style.prompt.includes(text), text);
+    assert.equal(style.prompt.length, 743);
+});

@@ -4,6 +4,7 @@ import "yingce/backend/internal/app"
 
 type AgentAvatarBundleManifest = app.AgentAvatarBundleManifest
 type AgentAvatarBundleImport = app.AgentAvatarBundleImport
+type Live2DImport = app.Live2DImport
 
 const (
 	WorkbenchKindImage = app.WorkbenchKindImage
@@ -423,6 +424,7 @@ type (
 	VideoReferenceConfig                   = app.VideoReferenceConfig
 	VoiceProfileSummary                    = app.VoiceProfileSummary
 	WalletSummary                          = app.WalletSummary
+	WalletHistorySummary                   = app.WalletHistorySummary
 	WorkflowField                          = app.WorkflowField
 )
 
