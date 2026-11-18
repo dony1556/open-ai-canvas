@@ -84,7 +84,7 @@ func structuredSkillBlock(step string, skill *WritingSkill) string {
 	if skill == nil || strings.TrimSpace(skill.Content) == "" {
 		return ""
 	}
-	return fmt.Sprintf("【写作技能：%s】\n下面是%s必须遵循的方法与标准（来自技能文件 %s）。按技能决定取舍、粒度与写法；输出仍然只能是下面要求的 JSON，字段名与结构不变，技能与 JSON 结构冲突时以 JSON 结构为准，技能里要求的其他输出格式不要输出。\n<skill>\n%s\n</skill>\n\n", skill.Name, step, skill.Path, truncateRunes(strings.TrimSpace(skill.Content), MaxWritingSkillRunes))
+	return fmt.Sprintf("【写作技能：%s】\n下面是%s必须遵循的方法与标准（来自技能文件 %s）。按技能决定取舍、粒度与写法；输出仍然只能是下面要求的 JSON，字段名与结构不变，技能与 JSON 结构冲突时以 JSON 结构为准，技能里要求的其他输出格式不要输出。\n<skill>\n%s\n</skill>\n\n", skill.Name, step, skill.Path, strings.TrimSpace(skill.Content))
 }
 
 // BiblePrompt 基于抽样后的全书文本建立角色、场景与整体风格；skill 不为空时按技能的方法提取。

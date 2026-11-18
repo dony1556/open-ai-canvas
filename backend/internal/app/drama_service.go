@@ -687,7 +687,7 @@ func dramaJobTaskView(task *model.Task, labels map[string]string) *DramaJobTaskV
 	view := &DramaJobTaskView{
 		ID: task.ID, Status: string(task.Status), Stage: task.Stage, Operation: task.Operation, Model: task.Model,
 		ModelLabel: firstNonEmpty(labels["l:"+task.LogicalModelID], labels["m:"+task.Model], task.Model),
-		Prompt:     truncateRunes(task.Prompt, 6000), Params: map[string]string{}, Error: task.Error, MediaStage: task.MediaStage,
+		Prompt:     task.Prompt, Params: map[string]string{}, Error: task.Error, MediaStage: task.MediaStage,
 		CreatedAt: task.CreatedAt.Format(time.RFC3339),
 	}
 	if task.StartedAt != nil {

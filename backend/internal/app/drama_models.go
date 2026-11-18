@@ -1,6 +1,7 @@
 package app
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -1057,7 +1058,7 @@ func (s *Service) dramaWritingSkill(userID string, ref *DramaSkillRef, label str
 	if ref == nil || strings.TrimSpace(ref.SkillID) == "" {
 		return nil, nil
 	}
-	if err := s.RequireSkillAdministrator(userID); err != nil {
+	if err := s.RequireSkillAccess(userID); err != nil {
 		return nil, err
 	}
 	file, err := s.SkillPackageFile(userID, ref.SkillID, ref.Path)
@@ -1071,5 +1072,44 @@ func (s *Service) dramaWritingSkill(userID string, ref *DramaSkillRef, label str
 	if file.Binary || strings.TrimSpace(file.Content) == "" {
 		return nil, BadAuthRequest(label + "技能文件 " + ref.Path + " 不是文本或为空")
 	}
-	return &production.WritingSkill{Name: firstNonEmpty(ref.SkillName, ref.SkillID), Path: ref.Path, Content: file.Content}, nil
+	content, err := production.SelectWritingSkillSection(file.Content, ref.Section)
+	if err != nil {
+		return nil, BadAuthRequest(label + "：" + err.Error())
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, BadAuthRequest(label + "技能正文为空")
+	}
+	if len(ref.ReferencePaths) > 8 {
+		return nil, BadAuthRequest("每个步骤最多附加 8 份引用文件")
+	}
+	pack := func(path, section, body string) string {
+		return fmt.Sprintf("【技能文件：%s｜章节：%s｜SHA256：%x】\n%s", path, firstNonEmpty(section, "全文"), sha256.Sum256([]byte(body)), body)
+	}
+	content = pack(ref.Path, ref.Section, content)
+	seen := map[string]bool{ref.Path: true}
+	for _, path := range ref.ReferencePaths {
+		if path == "" || len(path) > 300 || seen[path] {
+			return nil, BadAuthRequest("引用文件路径为空、过长或重复，请重新选择")
+		}
+		seen[path] = true
+		attachment, readErr := s.SkillPackageFile(userID, ref.SkillID, path)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if attachment.Binary {
+			return nil, BadAuthRequest("引用文件必须是文本：" + path)
+		}
+		body, bodyErr := production.SelectWritingSkillSection(attachment.Content, "")
+		if bodyErr != nil {
+			return nil, BadAuthRequest(path + "：" + bodyErr.Error())
+		}
+		if strings.TrimSpace(body) == "" {
+			return nil, BadAuthRequest("引用文件为空：" + path)
+		}
+		content += "\n\n" + pack(path, "", body)
+	}
+	if err := production.ValidateWritingSkillContent(content); err != nil {
+		return nil, BadAuthRequest(label + "：" + err.Error())
+	}
+	return &production.WritingSkill{Name: firstNonEmpty(ref.SkillName, ref.SkillID), Path: ref.Path, Content: content}, nil
 }

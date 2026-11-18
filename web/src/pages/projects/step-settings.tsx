@@ -57,6 +57,7 @@ function OverridePicker({ capability, value, fallback, onChange }: { capability:
 
 /** 文字步骤：资产提取、分镜拆分、视频提示词各自的文本模型与写作技能。 */
 export function DramaTextSteps({
+    aspectRatio,
     models,
     onModelsChange,
     skills,
@@ -64,6 +65,7 @@ export function DramaTextSteps({
     textThinking,
     onThinkingChange,
 }: {
+    aspectRatio?: string;
     models?: Partial<DramaModels>;
     onModelsChange: (patch: Partial<DramaModels>) => void;
     skills: DramaStepSkills;
@@ -113,7 +115,7 @@ export function DramaTextSteps({
                     {canUseSkills && (
                         <div className="drama-step-field">
                             <span className="drama-step-caption">技能</span>
-                            <PromptSkillField compact step={item.step} value={skills[SKILL_FIELD[item.step]]} onChange={(value) => onSkillChange(item.step, value)} />
+                            <PromptSkillField compact aspectRatio={aspectRatio} step={item.step} value={skills[SKILL_FIELD[item.step]]} onChange={(value) => onSkillChange(item.step, value)} />
                         </div>
                     )}
                     <div className="drama-step-field">

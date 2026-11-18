@@ -542,6 +542,7 @@ export default function DramaCreatePage() {
                             <span>每一步可以单独设置思考意图、文本模型和写作技能；思考档位按实际使用模型归一</span>
                         </div>
                         <DramaTextSteps
+                            aspectRatio={aspectRatio}
                             models={resolvedModels}
                             onModelsChange={(patch) => setModels((current) => ({ ...current, ...patch }))}
                             skills={{ bible: bibleSkill, script: scriptSkill, prompt: promptSkill }}

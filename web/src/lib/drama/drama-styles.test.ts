@@ -35,6 +35,6 @@ test("gufeng romance preset retains its custom prompt and theme mapping", () => 
     assert.equal(style.name, "古风短剧");
     assert.deepEqual(getDramaStyleComposition(style.id), { formId: "realistic", themeId: "palace" });
     for (const query of ["古风", "甜宠", "古装", "仙侠", "宫廷"]) assert.ok(filterDramaStyles("live", query).includes(style), query);
-    for (const text of ["真人实拍古风短剧质感", "暖金与月白", "仙侠忌浓艳暖色", "宫廷忌轻浮休闲装束"]) assert.ok(style.prompt.includes(text), text);
-    assert.equal(style.prompt.length, 743);
+    for (const text of ["超写实肖像质感", "COSER级精致妆造", "暖金为主调", "冷蓝环境反射", "不与主角争视觉焦点", "整体糊化与纹理丢失", "仙侠忌浓艳暖色", "宫廷忌轻浮休闲装束"]) assert.ok(style.prompt.includes(text), text);
+    assert.equal(style.prompt.length, 1127);
 });

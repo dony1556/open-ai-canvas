@@ -919,6 +919,7 @@ export function SettingsPanel({ projectId, summary, cast, onChanged }: { project
                             <section className="drama-cfg-card">
                                 <SettingsTitle title="文字步骤" detail="每一步可以单独设置思考意图、文本模型和写作技能；思考等级按实际使用模型的能力归一化，对之后执行的步骤生效" icon={<ScrollText className="size-4" />} />
                                 <DramaTextSteps
+                                    aspectRatio={settings.aspectRatio}
                                     models={settings.models}
                                     onModelsChange={setModels}
                                     skills={{ bible: settings.bibleSkill, script: settings.scriptSkill, prompt: settings.promptSkill }}

@@ -144,9 +144,11 @@ const (
 
 // DramaSkillRef 指向用户技能库里的一个技能文件，用作文字步骤（资产提取、分镜拆分、视频提示词）的写作方法。
 type DramaSkillRef struct {
-	SkillID   string `json:"skillId"`
-	SkillName string `json:"skillName"`
-	Path      string `json:"path"`
+	SkillID        string   `json:"skillId"`
+	SkillName      string   `json:"skillName"`
+	Path           string   `json:"path"`
+	Section        string   `json:"section,omitempty"`
+	ReferencePaths []string `json:"referencePaths,omitempty"`
 }
 
 // normalizedDramaSkillRef 截断字段长度；没有技能 ID 时视为未选择。
@@ -155,6 +157,8 @@ func normalizedDramaSkillRef(value *DramaSkillRef) *DramaSkillRef {
 		return nil
 	}
 	ref := DramaSkillRef{SkillID: truncateRunes(strings.TrimSpace(value.SkillID), 64), SkillName: truncateRunes(strings.TrimSpace(value.SkillName), 120), Path: truncateRunes(strings.TrimSpace(value.Path), 300)}
+	ref.Section = strings.TrimSpace(value.Section)
+	ref.ReferencePaths = append([]string(nil), value.ReferencePaths...)
 	if ref.SkillID == "" {
 		return nil
 	}

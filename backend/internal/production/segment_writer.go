@@ -21,7 +21,7 @@ type WritingSkill struct {
 	Content string
 }
 
-// MaxWritingSkillRunes 是写进撰写提示词的技能正文上限，超出部分截断。
+// MaxWritingSkillRunes 是技能正文和所选引用文件的总上限；加载时拒绝超限，禁止截断。
 const MaxWritingSkillRunes = 16000
 
 // SegmentWriterPrompt 给出写作格式与本段素材。draft 是按镜头表机械整理的素材稿，时间码与台词以它为准。
@@ -37,11 +37,14 @@ func SegmentWriterPrompt(in SegmentPromptInput, draft string, previousEnding str
 		fmt.Fprintf(&b, "【篇幅】全文不超过 %d 个字符（含标点、空格与换行）。这是视频模型的硬上限，超出会被拒绝；宁可写短，不要写满。\n\n", in.MaxChars)
 	}
 	if skill != nil {
-		fmt.Fprintf(&b, "【写作技能：%s】\n下面是你必须遵循的视频提示词写作方法（来自技能文件 %s）。技能规定了结构、栏目或写法时，按技能输出，下方【输出格式】只作补充；【篇幅】与【硬性规则】始终适用。\n<skill>\n%s\n</skill>\n\n", skill.Name, skill.Path, truncateRunes(strings.TrimSpace(skill.Content), MaxWritingSkillRunes))
+		fmt.Fprintf(&b, "【写作技能：%s】\n下面是你必须遵循的视频提示词写作方法（来自技能文件 %s）。技能规定了结构、栏目或写法时，按技能输出，下方【输出格式】只作补充；【篇幅】与【硬性规则】始终适用。\n<skill>\n%s\n</skill>\n\n", skill.Name, skill.Path, strings.TrimSpace(skill.Content))
 	}
 	fmt.Fprintf(&b, "【表演与运镜】\n%s\n%s\n禁止：面无表情、表情僵硬、眼神呆滞、只动嘴不动脸、朗读腔或播音腔、人物像摆拍一样站着不动。\n\n", PerformanceRule(in.Performance), CameraMotionRule(in.CameraMotion))
-	b.WriteString(`【输出格式】严格按以下结构与顺序书写，栏目名原样保留：
-`)
+	if skill != nil && strings.TrimSpace(skill.Content) != "" {
+		b.WriteString("本次仅撰写当前剧情段的视频提示词，不执行技能中的其他阶段、脚本或生成操作。作品画幅、镜头时间、原文台词、参考图编号及篇幅约束优先于技能中冲突的固定参数。\n【输出格式】优先采用所选技能的本步骤结构；以下栏目作为信息完整性参考，不要求照抄标题与顺序：\n")
+	} else {
+		b.WriteString("【输出格式】严格按以下结构与顺序书写，栏目名原样保留：\n")
+	}
 	if in.Index > 0 && in.Independent {
 		fmt.Fprintf(&b, "本段与其他段并行独立生成（不附带第%d段画面）：开场站位、朝向、服装道具状态与上一段结尾保持一致，但不写“定格”“接续”之类依赖上一段画面的描述\n", in.Index)
 	} else if in.Index > 0 {

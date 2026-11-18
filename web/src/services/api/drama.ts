@@ -86,7 +86,7 @@ export type DramaPacing = "rapid" | "fast" | "standard" | "relaxed" | "slow";
 export type DramaDialogue = "dense" | "standard" | "sparse" | "custom";
 
 /** 用户技能库里的一个技能文件，作为文字步骤（资产提取、分镜拆分、视频提示词）的写作方法。 */
-export type DramaSkillRef = { skillId: string; skillName: string; path: string };
+export type DramaSkillRef = { skillId: string; skillName: string; path: string; section?: string; referencePaths?: string[] };
 
 export type DramaTextThinking = Partial<Record<"bible" | "plan" | "script" | "prompt", ThinkingRequest>>;
 

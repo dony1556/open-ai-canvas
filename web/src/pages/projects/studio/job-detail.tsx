@@ -4,6 +4,7 @@ import { AntTooltip as Tooltip } from "@/components/ui/base/tooltip/ant-tooltip"
 import { AlertCircle, CheckCircle2, Clock3, Copy, Crosshair, Loader2, XCircle } from "lucide-react";
 
 import { AppModal } from "@/components/ui/product/app-modal";
+import { skillRequestEvidence } from "@/lib/drama/writing-skill";
 import { getDramaJob, type DramaJob, type DramaJobAttempt, type DramaJobTask } from "@/services/api/drama";
 
 import { formatCredits, MediaThumb, useResourceMediaUrl } from "../drama-shared";
@@ -130,7 +131,13 @@ export function JobDetailModal({ projectId, job, onClose, onLocate }: { projectI
                         {query.isLoading ? <div className="drama-jobd-empty">正在读取请求记录…</div> : null}
                         {detail && !detail.attempts.length ? <div className="drama-jobd-empty">还没有提交过请求，正在排队。</div> : null}
                         {detail?.attempts.map((attempt, index) => (
-                            <AttemptCard key={`${attempt.taskId || "rejected"}-${attempt.at}`} attempt={attempt} index={detail.attempts.length - index} latest={index === 0} />
+                            <AttemptCard
+                                key={`${attempt.taskId || "rejected"}-${attempt.at}`}
+                                attempt={attempt}
+                                index={detail.attempts.length - index}
+                                latest={index === 0}
+                                skillStep={["bible", "cast_extract", "script", "segment_prompt"].includes(current.kind)}
+                            />
                         ))}
                     </div>
                 </div>
@@ -139,7 +146,7 @@ export function JobDetailModal({ projectId, job, onClose, onLocate }: { projectI
     );
 }
 
-function AttemptCard({ attempt, index, latest }: { attempt: DramaJobAttempt; index: number; latest: boolean }) {
+function AttemptCard({ attempt, index, latest, skillStep }: { attempt: DramaJobAttempt; index: number; latest: boolean; skillStep: boolean }) {
     const { message } = App.useApp();
     const task = attempt.task;
     const copy = (text: string) =>
@@ -186,6 +193,7 @@ function AttemptCard({ attempt, index, latest }: { attempt: DramaJobAttempt; ind
                     </Tooltip>
                 </div>
             ) : null}
+            {skillStep && task?.prompt ? <pre className="drama-jobd-pre thin-scrollbar">{skillRequestEvidence(task.prompt)}</pre> : null}
             {task?.prompt ? (
                 <details className="drama-disclosure">
                     <summary>

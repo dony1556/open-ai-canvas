@@ -155,6 +155,7 @@ export function ScriptView({
                         </span>
                     </div>
                     {detail.dialogueCheck ? <DialogueCheckNotice check={detail.dialogueCheck} busy={busy} onRescript={confirmRescript} /> : null}
+                    {episode.sourceFormat === "storyboard" && shots.length > 0 && !detail.scriptJob ? <p className="text-xs text-foreground/60">本集没有分镜模型任务记录。直接导入的分镜不会执行“分镜拆分”技能；该设置仅在调用文本模型拆分时使用。</p> : null}
                 </section>
 
                 {shots.length ? (
