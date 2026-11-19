@@ -30,16 +30,14 @@ test("urban daily 3D preset preserves its art direction and is searchable", () =
     assert.doesNotMatch(JSON.stringify(style), /UE5|真实的皮肤纹理|3D写实/);
 });
 
-test("gufeng romance preset preserves individual character designs", () => {
+test("gufeng romance preset uses warm backlight and preserves character designs", () => {
     const style = findDramaStyle("live-gufeng-romance")!;
     assert.equal(style.name, "古风短剧");
     assert.deepEqual(getDramaStyleComposition(style.id), { formId: "realistic", themeId: "palace" });
     for (const query of ["古风", "甜宠", "古装", "仙侠", "宫廷"]) assert.ok(filterDramaStyles("live", query).includes(style), query);
     for (const text of Object.values(style.detail)) assert.ok(style.prompt.includes(text), text);
-    for (const text of ["脸型、五官、年龄与肤色依角色设定", "发型、服装与配饰按角色设定", "深冷青和蓝灰留在背景", "明亮透润、肤色自然", "冷白侧逆光", "大范围乳白镜头泛光", "瞳孔、睫毛与发丝清晰", "字幕、播放图标"])
-        assert.ok(style.prompt.includes(text), text);
-    assert.match(style.detail.wardrobe, /甜美女主用透亮蜜桃妆.*粉橘.*腮红.*蜜桃粉唇；清俊男主用清透薄底妆.*淡茶粉眼尾.*浅豆沙润唇；其余角色妆容随设定/);
-    assert.match(style.detail.look, /连续的乳白渐层，从发缘、肩线漫过衣袖与近处前景，向暗背景柔和渐隐/);
-    assert.ok(style.prompt.length <= 390);
-    assert.doesNotMatch(style.prompt, /薄刘海|垂珠|花簪|发冠|长眉凤眼|白净透粉|月白交领袍|粉白花绣|COSER|仙侠分支|宫廷分支|毛孔|9:16/);
+    for (const text of ["暖金高位侧逆光直射镜头", "宽软光晕与半透明圆形炫光", "光束在薄雾中散开", "暗部留冷蓝环境反光", "眼神、发丝与衣料纹理可辨", "配饰与具体妆容随角色设定"]) assert.ok(style.prompt.includes(text), text);
+    assert.match(style.detail.wardrobe, /奶油肌.*甜美女主.*桃杏.*水润玫瑰唇.*清俊男主.*暖棕红眼尾.*随角色设定/);
+    assert.ok(style.prompt.length <= 360);
+    assert.doesNotMatch(style.prompt, /冷白侧逆光|深冷青和蓝灰留在背景|薄刘海|垂珠|花簪|发冠|长眉凤眼|月白交领袍|粉白花绣|9:16/);
 });

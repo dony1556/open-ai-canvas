@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { App } from "antd";
 import { useNavigate } from "react-router";
@@ -39,13 +39,25 @@ export function useDramaEpisode(projectId: string, episodeId: string, active: bo
     });
 }
 
-export function useDramaCast(projectId: string, active: boolean) {
+export function useDramaCast(projectId: string, summary: DramaSummary | undefined, visible: boolean) {
+    const active = summaryActive(summary);
     const query = useQuery({
         queryKey: dramaKeys.cast(projectId),
         queryFn: ({ signal }) => listDramaCast(projectId, signal),
         enabled: Boolean(projectId),
         refetchInterval: (state) => (active && state.state.data?.cast.some((cast) => cast.imageStatus !== "ready" && cast.imageStatus !== "failed" && !cast.locked) ? 4_000 : false),
     });
+    const { refetch } = query;
+    const refreshKey = summary ? [summary.castCount, summary.jobCounts.succeeded || 0, summary.jobCounts.failed || 0, summary.jobCounts.canceled || 0].join(":") : undefined;
+    const previous = useRef<{ projectId: string; visible: boolean; refreshKey?: string }>(undefined);
+    useEffect(() => {
+        const last = previous.current?.projectId === projectId ? previous.current : undefined;
+        previous.current = { projectId, visible, refreshKey };
+        const entered = visible && !last?.visible;
+        const changed = last?.refreshKey !== undefined && refreshKey !== undefined && last.refreshKey !== refreshKey;
+        if (projectId && (entered || changed)) void refetch();
+    }, [projectId, visible, refreshKey, refetch]);
+
     const byId = useMemo(() => new Map((query.data?.cast || []).map((cast) => [cast.id, cast] as const)), [query.data]);
     return { ...query, cast: query.data?.cast || [], byId };
 }
