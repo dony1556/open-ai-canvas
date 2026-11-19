@@ -52,6 +52,15 @@ describe("applyGeneratedMediaResultMetadata", () => {
         expect(result.additionalNodes).toEqual([]);
         expect(node.metadata?.taskStatus).toBe("queued");
     });
+
+    test("text output uses the asset already persisted by the task", async () => {
+        const node = { ...videoNode("old", ""), type: CanvasNodeType.Text, metadata: { assetId: "old", assetVersionId: "old-version" } };
+        const task = { id: "task", type: "canvas_text", status: "succeeded" as const, prompt: "改稿", attempts: 1, createdAt: "", updatedAt: "", resultJson: JSON.stringify({ text: "正文", assetId: "registered" }) };
+        const applied = await applyGenerationTaskResultToNodes([node], task, node.id);
+        expect(applied.node?.metadata?.assetId).toBe("registered");
+        expect(applied.node?.metadata?.assetVersionId).toBeUndefined();
+        expect(applied.node?.metadata?.content).toBe("正文");
+    });
     test("旧 Midjourney 单图节点需要补齐结果，新堆叠与普通模型不重复恢复", () => {
         const old = { ...videoNode("asset", "resource:old"), type: CanvasNodeType.Image, metadata: { content: "/old.png", status: "success" as const, taskId: "task", producedModel: "CHANNEL::Midjourney v8.2 高速" } };
         const task = { id: "task", type: "canvas_image", status: "succeeded" as const, prompt: "", attempts: 1, createdAt: "", updatedAt: "", resultJson: JSON.stringify({ images: Array.from({ length: 4 }, () => ({ dataUrl: "/image.png" })) }) };

@@ -1,4 +1,5 @@
 import { ImageSizePicker } from "@/components/image-size-picker";
+import { workspaceTeamId } from "@/lib/workspace-routes";
 import { ImageParameterFields } from "@/components/image-parameter-fields";
 import { imageResolutionUsesQuality, imageSizePresets } from "@/lib/image-size-presets";
 import { createPortal } from "react-dom";
@@ -37,6 +38,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { useGenerationBatchLimit, batchQuoteTotal } from "@/lib/generation-batch-limit";
 import type { PromptOptimizerProvider } from "@/lib/plugins/plugin-types";
 import { type CreationReference } from "./creation-references";
+import { hasCreationReferenceDrop, readCreationReferenceDrop, type CreationReferenceDrop } from "./creation-reference-drop";
 import { creationAttachmentKind, type CreationAttachment, type CreationMode } from "./creation-assets";
 import { countOptions, modeLabels, qualityOptions, resolutionOptions, type CreationShotRailEntry } from "./creation-types";
 import { creationMessageNeedsResultSync } from "./creation-conversations";
@@ -157,6 +159,8 @@ type ComposerProps = {
     busy: boolean;
     generationActive: boolean;
     referenceReplacementBusy: boolean;
+    referenceDropBusy: boolean;
+    onReferenceDrop: (drop: CreationReferenceDrop) => void;
     attachments: CreationAttachment[];
     referenceImageSize?: { width: number; height: number };
     maxReferences: number;
@@ -208,6 +212,7 @@ type ComposerProps = {
 type CreationReferenceFilter = "all" | "image" | "video" | "audio" | "file";
 
 export function CreationComposer(props: ComposerProps) {
+    const [referenceDragOver, setReferenceDragOver] = useState(false);
     const [previewUrl, setPreviewUrl] = useState("");
     const [previewType, setPreviewType] = useState<"image" | "video">("image");
     const [promptOptimizerOpen, setPromptOptimizerOpen] = useState(false);
@@ -219,7 +224,7 @@ export function CreationComposer(props: ComposerProps) {
     const suppressAttachmentClickRef = useRef(false);
     const [trackState, setTrackState] = useState({ canScrollLeft: false, canScrollRight: false, isExpanded: true, isDragging: false });
     const previousAttachmentCountRef = useRef(0);
-    const interactionBusy = props.busy || props.referenceReplacementBusy;
+    const interactionBusy = props.busy || props.referenceReplacementBusy || props.referenceDropBusy;
     // 创作页张数等于拆单数，上限按账号同时任务数，硬上限仍为 15。
     const imageBatchLimit = Math.min(15, useGenerationBatchLimit());
     const settingsError = mediaSettingIssues(props.config, props.mode, props.model)
@@ -387,7 +392,40 @@ export function CreationComposer(props: ComposerProps) {
     // 否则高光停在页签下沿，会把选中页签和内容面切成两块。
     const embedded = props.variant === "empty";
     const surface = (
-        <SpotlightSurface className={`creation-chat-composer is-${props.variant}`} contentClassName="contents" spotlightColor={embedded ? "transparent" : "color-mix(in srgb, var(--user-ink) 12%, transparent)"} spotlightRadius={280}>
+        <SpotlightSurface
+            className={`creation-chat-composer is-${props.variant}${referenceDragOver ? " is-reference-drag-over" : ""}`}
+            contentClassName="contents"
+            spotlightColor={embedded ? "transparent" : "color-mix(in srgb, var(--user-ink) 12%, transparent)"}
+            spotlightRadius={280}
+            onDragOver={(event) => {
+                if (!hasCreationReferenceDrop(event.dataTransfer)) return;
+                if (event.defaultPrevented) {
+                    setReferenceDragOver(false);
+                    return;
+                }
+                event.preventDefault();
+                event.dataTransfer.dropEffect = interactionBusy ? "none" : "copy";
+                setReferenceDragOver(!interactionBusy);
+            }}
+            onDragLeave={(event) => {
+                if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setReferenceDragOver(false);
+            }}
+            onDrop={(event) => {
+                setReferenceDragOver(false);
+                // 引用标签已处理的文件替换不能再追加一遍。
+                if (event.defaultPrevented || !hasCreationReferenceDrop(event.dataTransfer)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (interactionBusy) return;
+                const drop = readCreationReferenceDrop(event.dataTransfer);
+                if (drop) props.onReferenceDrop(drop);
+            }}
+        >
+            {referenceDragOver || props.referenceDropBusy ? (
+                <div className="creation-reference-drop-hint" role="status">
+                    {props.referenceDropBusy ? "正在添加参考图…" : "松开添加参考图"}
+                </div>
+            ) : null}
             <div className="creation-chat-writing-surface">
                 <div className="creation-chat-editor">
                     <CanvasResourceMentionTextarea
@@ -527,7 +565,7 @@ export function CreationComposer(props: ComposerProps) {
             </div>
             <footer className="creation-chat-dock">
                 <div className="creation-chat-controls">
-                    {props.variant === "thread" ? <ModePicker mode={props.mode} onModeChange={props.onModeChange} /> : null}
+                    {props.variant === "thread" && !workspaceTeamId ? <ModePicker mode={props.mode} onModeChange={props.onModeChange} /> : null}
                     {referencesSupported && !props.attachments.length ? (
                         <Tooltip title={addReferenceLabel}>
                             <button type="button" className="creation-chat-control" onClick={props.onOpenLibrary} disabled={interactionBusy || !canAddMoreReferences} aria-label={addReferenceLabel}>
@@ -664,20 +702,18 @@ const creationModeItems: { mode: CreationMode; icon: ReactNode; label: string }[
 
 type CreationModeKey = CreationMode | "agent";
 
-// 首页页签的拉伸滑动：朝目标一侧的边用更硬的弹簧先到，另一侧稍后跟上，页签先拉长再收拢。
+const homeModeOptions: { mode: CreationModeKey; icon: ReactNode; label: string }[] = workspaceTeamId ? creationModeItems.filter((item) => item.mode === "text") : [...creationModeItems, { mode: "agent", icon: <Orbit />, label: "Agent" }];
+
 const folderTabLeadingSpring = { type: "spring", stiffness: 540, damping: 42, mass: 0.6 } as const;
 const folderTabTrailingSpring = { type: "spring", stiffness: 280, damping: 32, mass: 0.8 } as const;
 
-/** 首页创作卡：顶部文件夹页签切换视频 / 图片 / 文本 / Agent，选中页签与下方内容面同色相连。 */
 export function CreationModeCard({ mode, agentActive, onModeChange, onAgentSelect, children }: { mode: CreationMode; agentActive: boolean; onModeChange: (mode: CreationMode) => void; onAgentSelect: () => void; children: ReactNode }) {
     const reducedMotion = useReducedMotion();
-    const keys: CreationModeKey[] = [...creationModeItems.map((item) => item.mode), "agent"];
     const activeKey: CreationModeKey = agentActive ? "agent" : mode;
-    const activeIndex = Math.max(0, keys.indexOf(activeKey));
-    // 记住上一次的位置来判断滑动方向；在渲染期调整状态，切换当帧就拿到新方向。
+    const activeIndex = homeModeOptions.findIndex((item) => item.mode === activeKey);
     const [slide, setSlide] = useState({ index: activeIndex, direction: 0 });
     if (slide.index !== activeIndex) setSlide({ index: activeIndex, direction: Math.sign(activeIndex - slide.index) });
-    const step = 100 / keys.length;
+    const step = 100 / homeModeOptions.length;
     const tabTransition: Transition = reducedMotion
         ? { duration: 0 }
         : {
@@ -686,29 +722,36 @@ export function CreationModeCard({ mode, agentActive, onModeChange, onAgentSelec
           };
     return (
         <HoverBorderGradient as="div" duration={2.2} containerClassName="creation-mode-card" className="creation-mode-card-inner">
-            <div className="creation-mode-folder" role="group" aria-label="创作模式" data-active-mode={activeKey} style={{ "--creation-mode-count": keys.length } as CSSProperties}>
-                <motion.span className="creation-mode-folder-tab" aria-hidden initial={false} animate={{ left: `${activeIndex * step}%`, right: `${(keys.length - 1 - activeIndex) * step}%` }} transition={tabTransition}>
+            <div className="creation-mode-folder" role="group" aria-label="创作模式" data-active-mode={activeKey} style={{ "--creation-mode-count": homeModeOptions.length } as CSSProperties}>
+                <motion.span className="creation-mode-folder-tab" aria-hidden initial={false} animate={{ left: `${activeIndex * step}%`, right: `${(homeModeOptions.length - 1 - activeIndex) * step}%` }} transition={tabTransition}>
                     <CreationModeFolderWing side="start" />
                     <CreationModeFolderWing side="end" />
                 </motion.span>
-                {creationModeItems.map((item) => (
-                    <button key={item.mode} type="button" className="creation-mode-folder-button" data-mode={item.mode} aria-pressed={activeKey === item.mode} aria-label={`${item.label}生成`} onClick={() => onModeChange(item.mode)}>
-                        {item.icon}
-                        <span>{item.label}</span>
+                {homeModeOptions.map(({ mode: next, icon, label }) => (
+                    <button
+                        key={next}
+                        type="button"
+                        className="creation-mode-folder-button"
+                        data-mode={next}
+                        aria-pressed={activeKey === next}
+                        aria-label={next === "agent" ? label : `${label}生成`}
+                        onClick={() => {
+                            if (next === activeKey) return;
+                            if (next === "agent") onAgentSelect();
+                            else onModeChange(next);
+                        }}
+                    >
+                        {icon}
+                        <span>{label}</span>
+                        {next === "agent" && <i className="creation-mode-spark" aria-hidden />}
                     </button>
                 ))}
-                <button type="button" className="creation-mode-folder-button" data-mode="agent" aria-pressed={agentActive} onClick={onAgentSelect}>
-                    <Orbit />
-                    <span>Agent</span>
-                    <i className="creation-mode-spark" aria-hidden />
-                </button>
             </div>
             <div className="creation-mode-panel">{children}</div>
         </HoverBorderGradient>
     );
 }
 
-// 选中页签两侧的 S 形翼片：顶边水平切入、底边水平落到内容面；与页签主体重叠 1px，避免亚像素接缝。
 function CreationModeFolderWing({ side }: { side: "start" | "end" }) {
     return (
         <svg className={`creation-mode-folder-wing is-${side}`} viewBox="0 0 30 48" preserveAspectRatio="none" aria-hidden focusable="false">

@@ -543,6 +543,7 @@ export function updateAdminFeatureAvailability(
             | "shortDramaEnabled"
             | "taskCenterEnabled"
             | "creditsEnabled"
+            | "teamsEnabled"
             | "customChannelsEnabled"
             | "frontendModelsEnabled"
             | "pluginCenterEnabled"
