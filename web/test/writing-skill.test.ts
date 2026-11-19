@@ -9,9 +9,9 @@ test("step sections keep child rules and ignore fenced headings", () => {
     expect(() => selectSkillSection(source, "## 已删除")).toThrow();
     expect(() => selectSkillSection("## 资产\na\n## 资产\nb", "## 资产")).toThrow();
 });
-test("preview rejects metadata and over-budget bundles without cutting content", () => {
+test("preview rejects metadata and preserves long bundles without a fixed character cap", () => {
     expect(() => selectSkillSection("## Description: <br>\na\n## Publisher: <br>\nb\n## License/Terms of Use: <br>\nMIT", "")).toThrow("介绍");
-    expect(() => writingSkillPreview([{ path: "SKILL.md", section: "", content: "字".repeat(15950) }])).toThrow("不会截断");
+    expect(writingSkillPreview([{ path: "SKILL.md", section: "", content: "字".repeat(32000) + "正文末尾" }])).toContain("正文末尾");
     const text = writingSkillPreview([
         { path: "stage.md", section: "", content: "规则" },
         { path: "references/a.md", section: "", content: "模板末尾" },

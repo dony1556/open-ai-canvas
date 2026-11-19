@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 )
 
 var skillHeading = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
@@ -54,9 +53,6 @@ func SelectWritingSkillSection(content, section string) (string, error) {
 func ValidateWritingSkillContent(content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("技能正文为空")
-	}
-	if utf8.RuneCountInString(content) > MaxWritingSkillRunes {
-		return fmt.Errorf("所选技能和引用文件超过 %d 字符，请选择本步骤章节或减少引用文件；不会截断发送", MaxWritingSkillRunes)
 	}
 	return nil
 }

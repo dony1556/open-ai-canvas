@@ -44,7 +44,7 @@ func TestDramaWritingSkillLoadsSelectedSectionAndReferences(t *testing.T) {
 	if _, err := s.dramaWritingSkill("other", ref, "视频提示词"); err == nil {
 		t.Fatal("skill access check bypassed")
 	}
-	for i, body := range []string{strings.Repeat("长", 16001), "## Description: <br>\n介绍\n## Publisher: <br>\n作者\n## License/Terms of Use: <br>\nMIT"} {
+	for i, body := range []string{"## Description: <br>\n介绍\n## Publisher: <br>\n作者\n## License/Terms of Use: <br>\nMIT"} {
 		item, err := s.CreateSkill("user", SkillMutationRequest{SkillName: "无效规范" + strings.Repeat("X", i), Description: "测试", Instruction: body, Tag: "others", IsPrivate: true})
 		if err != nil {
 			t.Fatal(err)

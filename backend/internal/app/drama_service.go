@@ -697,9 +697,13 @@ func dramaJobTaskView(task *model.Task, labels map[string]string) *DramaJobTaskV
 		view.CompletedAt = task.CompletedAt.Format(time.RFC3339)
 	}
 	var input struct {
-		Config map[string]any `json:"config"`
+		Config   map[string]any `json:"config"`
+		Metadata map[string]any `json:"metadata"`
 	}
 	if json.Unmarshal([]byte(task.InputJSON), &input) == nil {
+		if report, ok := input.Metadata["dramaContextBudget"].(string); ok {
+			view.Params["上下文预算（估算）"] = report
+		}
 		for _, key := range dramaJobTaskParams {
 			if value := strings.TrimSpace(stringValue(input.Config[key])); value != "" {
 				view.Params[key] = truncateRunes(value, 300)

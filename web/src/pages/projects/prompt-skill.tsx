@@ -194,7 +194,7 @@ function PromptSkillModal({ open, step, initial, onClose, onPick, aspectRatio }:
                     <section>
                         <div className="drama-skill-import-caption">
                             {path || "原文"}
-                            {content ? <span>{[...content].length.toLocaleString("zh-CN")} 字符 · 总上限 16000</span> : null}
+                            {content ? <span>{[...content].length.toLocaleString("zh-CN")} 字符 · 按实际模型检查整条请求预算</span> : null}
                         </div>
                         <Select aria-label="本步骤使用的章节" className="w-full" value={section} onChange={setSection} options={[{ value: "", label: "使用全文" }, ...skillHeadings(content).map((heading) => ({ value: heading, label: heading }))]} />
                         <Select
@@ -207,7 +207,10 @@ function PromptSkillModal({ open, step, initial, onClose, onPick, aspectRatio }:
                             onChange={setReferencePaths}
                             options={files.filter((file) => file.path !== path).map((file) => ({ value: file.path, label: file.path }))}
                         />
-                        <p className="text-xs text-foreground/60">只发送所选正文与引用，不自动执行脚本。作品画幅、镜头时间与输出结构仍由系统约束；请检查技能是否与它们冲突。预览中的摘要占位符会在提交时替换为实际 SHA256。</p>
+                        <p className="text-xs text-foreground/60">
+                            只发送所选正文与引用，不自动执行脚本。提交任务前按实际模型检查系统提示词、剧本、技能、引用及输出预留的总预算；容量未知时无法确认是否放得下，会完整发送并在任务详情提示。Token
+                            为保守估算，实际费用依上游用量。作品画幅、镜头时间与输出结构仍由系统约束。预览中的摘要占位符会在提交时替换为实际 SHA256。
+                        </p>
                         {problem ? (
                             <p role="alert" className="text-red-500">
                                 {problem}

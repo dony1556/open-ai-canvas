@@ -22,18 +22,18 @@ func TestWritingSkillSelectionAndBudget(t *testing.T) {
 	if _, err := SelectWritingSkillSection(source, "## 已删除"); err == nil {
 		t.Fatal("stale section accepted")
 	}
-	for _, body := range []string{"", strings.Repeat("字", MaxWritingSkillRunes+1)} {
+	for _, body := range []string{""} {
 		if ValidateWritingSkillContent(body) == nil {
 			t.Fatal("invalid budget accepted")
 		}
 	}
-	if err := ValidateWritingSkillContent(strings.Repeat("字", MaxWritingSkillRunes)); err != nil {
+	if err := ValidateWritingSkillContent(strings.Repeat("字", 32000)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestWritingSkillPromptDoesNotSilentlyTruncate(t *testing.T) {
-	text := strings.Repeat("字", MaxWritingSkillRunes) + "正文末尾"
+	text := strings.Repeat("字", 32000) + "正文末尾"
 	skill := &WritingSkill{Name: "阶段规范", Path: "stage.md", Content: text}
 	for _, prompt := range []string{structuredSkillBlock("资产提取", skill), SegmentWriterPrompt(SegmentPromptInput{}, "", "", skill)} {
 		if !strings.Contains(prompt, "正文末尾") {

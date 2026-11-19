@@ -30,13 +30,13 @@ test("urban daily 3D preset preserves its art direction and is searchable", () =
     assert.doesNotMatch(JSON.stringify(style), /UE5|真实的皮肤纹理|3D写实/);
 });
 
-test("gufeng romance preset retains its custom prompt and theme mapping", () => {
+test("gufeng romance preset preserves individual character designs", () => {
     const style = findDramaStyle("live-gufeng-romance")!;
     assert.equal(style.name, "古风短剧");
     assert.deepEqual(getDramaStyleComposition(style.id), { formId: "realistic", themeId: "palace" });
     for (const query of ["古风", "甜宠", "古装", "仙侠", "宫廷"]) assert.ok(filterDramaStyles("live", query).includes(style), query);
-    for (const text of ["超写实肖像质感", "COSER级精致妆造", "暖金为主调", "冷蓝环境反射", "不与主角争视觉焦点", "整体糊化与纹理丢失", "仙侠忌浓艳暖色", "宫廷忌轻浮休闲装束"]) assert.ok(style.prompt.includes(text), text);
-    assert.equal(style.prompt.length, 1076);
-    assert.ok(style.detail.wardrobe.includes("蜜桃清透伪素颜妆"));
-    assert.ok(!style.prompt.includes("真实皮肤纹理作为底层约束"));
+    for (const text of Object.values(style.detail)) assert.ok(style.prompt.includes(text), text);
+    for (const text of ["脸型、五官、年龄与肤色依角色设定", "发型、服装与配饰按角色设定", "暖金侧逆光", "脸部柔光补亮", "字幕、播放图标"]) assert.ok(style.prompt.includes(text), text);
+    assert.ok(style.prompt.length <= 300);
+    assert.doesNotMatch(style.prompt, /薄刘海|垂珠|花簪|发冠|长眉凤眼|白净透粉|月白交领袍|粉白花绣|COSER|仙侠分支|宫廷分支|毛孔|9:16/);
 });

@@ -1,5 +1,3 @@
-export const MAX_WRITING_SKILL_CHARS = 16000;
-
 export function skillHeadings(content: string) {
     let fenced = false;
     return content
@@ -48,7 +46,6 @@ export function selectSkillSection(content: string, section: string) {
 
 export function writingSkillPreview(files: { path: string; section: string; content: string }[]) {
     const preview = files.map((file) => `【技能文件：${file.path}｜章节：${file.section || "全文"}｜SHA256：${"0".repeat(64)}】\n${selectSkillSection(file.content, file.section)}`).join("\n\n");
-    if ([...preview].length > MAX_WRITING_SKILL_CHARS) throw new Error("正文与引用文件超过 16000 字符，请选择本步骤章节或减少引用；不会截断发送。");
     return preview;
 }
 

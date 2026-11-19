@@ -21,9 +21,6 @@ type WritingSkill struct {
 	Content string
 }
 
-// MaxWritingSkillRunes 是技能正文和所选引用文件的总上限；加载时拒绝超限，禁止截断。
-const MaxWritingSkillRunes = 16000
-
 // SegmentWriterPrompt 给出写作格式与本段素材。draft 是按镜头表机械整理的素材稿，时间码与台词以它为准。
 // skill 不为空时按技能的方法与结构撰写，硬性规则仍然适用。
 func SegmentWriterPrompt(in SegmentPromptInput, draft string, previousEnding string, skill *WritingSkill) string {
